@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>OI-OPOLY engine tests</title>
+  <style>
+    body { background: #061014; color: #d8f5ec; font: 13px/1.6 Consolas, monospace; padding: 24px; }
+    h1 { color: #4ff0c0; font-size: 18px; }
+    .pass { color: #7dffc9; }
+    .fail { color: #ff8f8f; font-weight: 700; }
+    #out { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>信奥大富翁 · 规则引擎测试</h1>
+  <div id="out">running...</div>
+  <script src="../js/data.js"></script>
+  <script src="../js/core.js"></script>
+  <script src="../js/engine.js"></script>
+  <script>
+    (function () {
+      const Game = window.OI.Game;
+      const D = window.OI.DATA;
+      let pass = 0;
+      let fail = 0;
+      const lines = [];
+
+      function assert(cond, msg) {
+        if (cond) { pass += 1; lines.push('<span class="pass">PASS</span> ' + msg); }
+        else { fail += 1; lines.push('<span class="fail">FAIL</span> ' + msg); }
+      }
+      function section(name) { lines.push('\n— ' + name + ' —'); }
+
+      try {
+        section('初始化');
+        let st = Game.create({ difficulty: 'normal', count: 3, rounds: 25 });
+        assert(st.players.length === 3, '三人局创建成功');
+        assert(st.players[0].tokens === 20000, '起始 token 为 20,000');
+        assert(Object.keys(st.props).length === 28, '28 个可交易地块/设施');
+        assert(Game.netWorth(st.players[0]) === 20000, '初始总资产等于 token');
+        assert(Game.rentFor(1, 7) === 0, '无主地块租金为 0');
+
+        section('购买 / 垄断 / 算法 / 抵押');
+        st = Game.create({ difficulty: 'normal', count: 2, rounds: 25 });
+        const p = st.players[0];
+        Game.buy(p, 1);
+        Game.buy(p, 3);
+        Game.buy(p, 6);
+        assert(st.props[1].owner === p.id, '买下输入输出');
+        assert(Game.ownsGroup(p.id, 'basics'), '集齐入门基础章节');
+        assert(Game.rentFor(1, 7) === 240, '垄断后基础租金翻倍（120 → 240）');
+        const before = p.tokens;
+        const algo = Game.build(p, 1);
+        assert(!!algo && st.props[1].algos.length === 1, '安装算法成功');
+        assert(p.tokens === before - D.BOARD[1].buildCost, '安装扣除建造费');
+        assert(Game.rentFor(1, 7) === 600, '1 个算法后租金为 600');
+        assert(Game.mortgage(p, 1) === 0, '有算法时不能抵押');
+        Game.sellAlgo(p, 1);
+        assert(st.props[1].algos.length === 0, '卖出算法');
+        const mortgage = Game.mortgage(p, 1);
+        assert(mortgage > 0 && st.props[1].mortgaged, '抵押成功');
+        assert(Game.rentFor(1, 7) === 0, '抵押地块不收租');
+        assert(Game.redeem(p, 1), '赎回地块');
+
+        section('算力设施');
+        st = Game.create({ difficulty: 'normal', count: 2, rounds: 25 });
+        const f = st.players[0];
+        Game.buy(f, 5);
+        Game.buy(f, 12);
+        assert(Game.facilitiesOwned(f.id) === 2, '持有 2 座设施');
+        assert(Game.rentFor(5, 7) === 1680, '设施租金 = 120 × 2 × 7');
+
+        section('禁赛');
+        st = Game.create({ difficulty: 'normal', count: 2, rounds: 25 });
+        const j = st.players[0];
+        Game.sendToJail(j, '测试');
+        assert(j.pos === 10 && j.inJail, '被送进禁赛区');
+        const beforeFine = j.tokens;
+        Game.payJailFine(j);
+        assert(!j.inJail && j.tokens === beforeFine - D.CONFIG.jailFine, '缴纳保释金离开禁赛区');
+        assert(st.pot === D.CONFIG.jailFine, '保释金进入罚时池');
+
+        section('事件卡全部可执行');
+        st = Game.create({ difficulty: 'normal', count: 3, rounds: 25 });
+        const cPlayer = st.players[0];
+        cPlayer.tokens = 999999;
+        let cardErrors = 0;
+        D.CHANCE.concat(D.CHEST).forEach((card) => {
+          try {
+            const result = Game.applyCard(cPlayer, card);
+            if (card.effect.type === 'moveTo' && result.moveTo != null) {
+              Game.teleport(cPlayer, result.moveTo, result.salary);
+            }
+            if (card.effect.type === 'moveBy') {
+              for (let i = 0; i < card.effect.steps; i++) Game.stepForward(cPlayer);
+            }
+          } catch (e) {
+            cardErrors += 1;
+            lines.push('card error ' + card.id + ': ' + e.message);
+          }
+        });
+        assert(cardErrors === 0, '34 张事件卡全部执行无异常');
+        assert(cPlayer.getOut > 0, '获得了申诉信');
+
+        section('破产与清算');
+        st = Game.create({ difficulty: 'normal', count: 2, rounds: 25 });
+        const b = st.players[0];
+        Game.buy(b, 1);
+        const creditor = st.players[1];
+        const res = Game.charge(b, 9999999, creditor);
+        assert(res.bankrupt === true, '资不抵债时破产');
+        assert(!b.alive && b.tokens === 0, '破产者退出且 token 归零');
+        assert(st.props[1].owner === null, '破产者地块回到题库');
+        assert(st.over === true && st.winner, '只剩一人时比赛结束');
+
+        section('回合与赛程上限');
+        st = Game.create({ difficulty: 'normal', count: 2, rounds: 1 });
+        let turns = 0;
+        let finished = false;
+        while (!finished && turns < 20) {
+          turns += 1;
+          if (st.players[Game.state.current].inJail) Game.useGetOut(st.players[Game.state.current]);
+          const r = Game.endTurn(true);
+          if (r.finished) finished = true;
+        }
+        assert(finished, '1 回合赛程会结束比赛');
+        assert(st.ranking.length === 2, '结算排行包含全部选手');
+
+        section('随机模拟');
+        st = Game.create({ difficulty: 'normal', count: 4, rounds: 8 });
+        let guard = 0;
+        let valid = true;
+        const moveTo = (player, steps) => {
+          for (let i = 0; i < steps; i++) Game.stepForward(player);
+        };
+        const resolve = (player) => {
+          const landing = Game.describeLanding(player);
+          if (landing.kind === 'property') {
+            if (landing.action === 'buy' && Math.random() < 0.65) {
+              Game.buy(player, landing.tile.id);
+            } else if (landing.action === 'rent') {
+              Game.payRent(player, landing.tile.id, 7);
+            }
+          } else if (landing.kind === 'card') {
+            const card = Game.drawCard(landing.deck);
+            const result = Game.applyCard(player, card);
+            if (result.moveTo != null) Game.teleport(player, result.moveTo, result.salary);
+            else if (result.moveBy) moveTo(player, result.moveBy);
+          } else if (landing.kind === 'tax') {
+            Game.payTax(player, landing.amount);
+          } else if (landing.kind === 'jail' && landing.goto) {
+            Game.sendToJail(player, '模拟');
+          } else if (landing.kind === 'parking' && Game.state.pot > 0) {
+            Game.gain(player, Game.state.pot);
+            Game.state.pot = 0;
+          }
+          const owned = Game.ownedTiles(player.id);
+          if (owned.length && Math.random() < 0.4) {
+            const target = owned.find((t) => Game.canBuild(player, t.id));
+            if (target) Game.build(player, target.id);
+          }
+        };
+        const validate = () => {
+          Game.state.players.forEach((pl) => {
+            if (!(pl.tokens >= 0) || !Number.isFinite(pl.tokens)) valid = false;
+            if (pl.pos < 0 || pl.pos > 39) valid = false;
+          });
+          Object.keys(Game.state.props).forEach((id) => {
+            const prop = Game.state.props[id];
+            if (prop.owner && !Game.player(prop.owner)) valid = false;
+            if (prop.algos.length > D.CONFIG.maxAlgos) valid = false;
+            if (!prop.owner && prop.algos.length) valid = false;
+          });
+          D.BOARD.forEach((t) => {
+            if (t.type === 'property' || t.type === 'facility') {
+              const rent = Game.rentFor(t.id, 7);
+              if (!(rent >= 0) || !Number.isFinite(rent)) valid = false;
+            }
+          });
+          if (Game.marketMult('dp') < 0.4 || Game.marketMult('dp') > 2.5) valid = false;
+        };
+        while (!Game.state.over && guard < 800) {
+          guard += 1;
+          const active = Game.current();
+          if (active.inJail) {
+            const jailRes = Game.jailRoll(active);
+            if (jailRes.freed) {
+              moveTo(active, jailRes.roll.total);
+              resolve(active);
+            }
+          } else {
+            const roll = Game.roll();
+            if (Game.state.doubles >= 3) {
+              Game.sendToJail(active, '三次双数');
+            } else {
+              moveTo(active, roll.total);
+              resolve(active);
+            }
+          }
+          if (!Game.state.over) Game.endTurn();
+          validate();
+        }
+        assert(guard < 800, '随机对局在 800 次行动内结束或到达赛程上限');
+        assert(valid, '随机对局中 token / 位置 / 地产 / 租金始终合法');
+        assert(Game.state.over, '随机对局最终进入结算');
+        assert(Game.state.ranking.length === 4, '结算包含 4 名选手');
+        assert(Game.state.log.length > 10, '对局产生了日志');
+      } catch (err) {
+        fail += 1;
+        lines.push('<span class="fail">EXCEPTION</span> ' + (err && err.stack ? err.stack : err));
+      }
+
+      lines.unshift('<div>结果：<b class="' + (fail ? 'fail' : 'pass') + '">' + pass + ' passed, ' + fail + ' failed</b></div>');
+      document.getElementById('out').innerHTML = lines.join('\n');
+      document.body.dataset.result = fail ? 'fail' : 'pass';
+    })();
+  </script>
+</body>
+</html>

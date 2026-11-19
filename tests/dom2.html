@@ -1,0 +1,660 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="信奥大富翁：买下算法地块、造满算法房子、避开禁赛区，在 40 格机房里成为 token 最多的选手。">
+  <meta name="theme-color" content="#05090b">
+  <title>信奥大富翁 · OI-OPOLY</title>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/board.css">
+  <link rel="stylesheet" href="css/game.css">
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-logo" viewBox="0 0 48 48">
+      <rect x="4" y="4" width="40" height="40" rx="12"></rect>
+      <path d="M19 16.5 12 24l7 7.5M29 16.5 36 24l-7 7.5M26.5 14l-5 20"></path>
+    </symbol>
+    <symbol id="i-token" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5"></circle>
+      <path d="M12 7.5 15.5 12 12 16.5 8.5 12 12 7.5Z"></path>
+    </symbol>
+    <symbol id="i-dice" viewBox="0 0 24 24">
+      <rect x="4" y="4" width="16" height="16" rx="4"></rect>
+      <circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none"></circle>
+      <circle cx="15" cy="15" r="1.2" fill="currentColor" stroke="none"></circle>
+      <circle cx="15" cy="9" r="1.2" fill="currentColor" stroke="none"></circle>
+      <circle cx="9" cy="15" r="1.2" fill="currentColor" stroke="none"></circle>
+    </symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24">
+      <path d="M4 9v6h4l5 4V5L8 9H4Z"></path>
+      <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"></path>
+    </symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24">
+      <path d="M4 9v6h4l5 4V5L8 9H4Z"></path>
+      <path d="m16 9 5 5M21 9l-5 5"></path>
+    </symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24">
+      <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"></path>
+      <path d="M8 6H5v2a3 3 0 0 0 3 3M16 6h3v2a3 3 0 0 1-3 3M12 13v4M8 21h8M9 17h6"></path>
+    </symbol>
+    <symbol id="i-help" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M9.5 9a2.5 2.5 0 1 1 3.6 2.2c-.8.5-1.1 1-1.1 2M12 17h.01"></path>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+      <path d="m6 6 12 12M18 6 6 18"></path>
+    </symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24">
+      <path d="M5 12h14M13 6l6 6-6 6"></path>
+    </symbol>
+    <symbol id="i-jail" viewBox="0 0 24 24">
+      <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+      <path d="M8 4v16M12 4v16M16 4v16M4 9h16M4 15h16"></path>
+    </symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24">
+      <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+      <rect x="9.5" y="9.5" width="5" height="5" rx="1"></rect>
+      <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"></path>
+    </symbol>
+    <symbol id="i-card" viewBox="0 0 24 24">
+      <rect x="3" y="6" width="14" height="14" rx="2"></rect>
+      <path d="M7 3h12a2 2 0 0 1 2 2v12"></path>
+      <path d="M8 11h4M8 15h6"></path>
+    </symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24">
+      <path d="M5 21V4M5 5h11l-2 3 2 3H5"></path>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <path d="M4 20V4M4 20h16M8 17v-5M12.5 17V8M17 17v-8"></path>
+    </symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24">
+      <path d="m12 3 2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z"></path>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+      <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M20 11a8 8 0 1 0-2 6M20 5v6h-6"></path>
+    </symbol>
+  </svg>
+
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient__glow ambient__glow--mint"></div>
+    <div class="ambient__glow ambient__glow--cyan"></div>
+    <div class="ambient__glow ambient__glow--gold"></div>
+    <div class="ambient__grid"></div>
+    <div class="ambient__noise"></div>
+  </div>
+
+  <div class="app">
+    <header class="topbar">
+      <button class="brand" id="brandHome" type="button" aria-label="返回大厅">
+        <span class="brand__mark"><svg class="icon"><use href="#i-logo"></use></svg></span>
+        <span class="brand__text">
+          <strong>信奥大富翁</strong>
+          <small>OI-OPOLY · ALGORITHM TYCOON</small>
+        </span>
+      </button>
+      <div class="topbar__right">
+        <div class="bankroll" role="status" aria-live="polite">
+          <span class="bankroll__label">我的 token</span>
+          <strong class="bankroll__value" id="topbarTokens">20,000</strong>
+        </div>
+        <button class="icon-btn" id="soundBtn" type="button" aria-label="关闭音效" title="开关音效">
+          <svg class="icon"><use href="#i-sound"></use></svg>
+        </button>
+        <button class="icon-btn" id="achieveBtn" type="button" aria-label="查看成就，已解锁 0 个" title="成就 0/10">
+          <svg class="icon"><use href="#i-trophy"></use></svg>
+        </button>
+        <button class="icon-btn" id="helpBtn" type="button" aria-label="查看玩法" title="查看玩法">
+          <svg class="icon"><use href="#i-help"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- ==================== 大厅 ==================== -->
+      <section class="screen screen--setup" id="setupScreen" hidden="">
+        <div class="hero">
+          <p class="eyebrow"><span class="eyebrow__line"></span> WELCOME TO THE MACHINE ROOM</p>
+          <h1 class="hero__title">算法不会背叛你，<br><em>但骰子会。</em></h1>
+          <p class="hero__desc">四名选手，四十格机房。用 token 买下算法地块、造满算法房子、向路过的同学收租。被 hack、被禁赛、被随机事件背刺——直到有人 AK 全场，或者破产退役。</p>
+          <div class="hero__features">
+            <div class="feature">
+              <span class="feature__icon"><svg class="icon"><use href="#i-card"></use></svg></span>
+              <div><strong>24 块算法地产</strong><small>从输入输出到字符串哈希</small></div>
+            </div>
+            <div class="feature">
+              <span class="feature__icon"><svg class="icon"><use href="#i-spark"></use></svg></span>
+              <div><strong>随机事件</strong><small>事件卡与实时市场行情</small></div>
+            </div>
+            <div class="feature">
+              <span class="feature__icon"><svg class="icon"><use href="#i-jail"></use></svg></span>
+              <div><strong>禁赛机制</strong><small>申诉、保释，或掷出双数</small></div>
+            </div>
+          </div>
+          <p class="hero__quote">“这道题我不会，但我会买下它的出题人。”</p>
+        </div>
+
+        <aside class="setup-panel">
+          <div class="setup-panel__head">
+            <div>
+              <p class="eyebrow eyebrow--small">NEW GAME</p>
+              <h2>开一局</h2>
+            </div>
+            <div class="best-record">
+              <span>历史最佳资产</span>
+              <strong id="bestRecordValue">—</strong>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="step-head"><span class="step-num">01</span><h3>选择赛制</h3><span class="step-note" id="modeNote">常规赛 · 起始 20,000</span></div>
+            <div class="choice-grid" id="diffChoices">
+              <button class="choice" type="button" data-diff="easy">
+                <span class="choice__icon">🌙</span>
+                <span class="choice__main"><strong>摸鱼局</strong><small>AI 佛系，起始 26,000</small></span>
+              </button>
+              <button class="choice is-active" type="button" data-diff="normal">
+                <span class="choice__icon">⚡</span>
+                <span class="choice__main"><strong>常规赛</strong><small>标准对局，起始 20,000</small></span>
+                <span class="choice__tag">推荐</span>
+              </button>
+              <button class="choice" type="button" data-diff="hard">
+                <span class="choice__icon">🔥</span>
+                <span class="choice__main"><strong>省选</strong><small>AI 凶狠，起始 16,000</small></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="step-head"><span class="step-num">02</span><h3>对手数量</h3><span class="step-note">你 + AI</span></div>
+            <div class="segmented" id="countChoices">
+              <button class="segment" type="button" data-count="2"><strong>双人对线</strong><small>1 名 AI</small></button>
+              <button class="segment is-active" type="button" data-count="3"><strong>三人混战</strong><small>2 名 AI</small></button>
+              <button class="segment" type="button" data-count="4"><strong>四人机房</strong><small>3 名 AI</small></button>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="step-head"><span class="step-num">03</span><h3>赛程长度</h3><span class="step-note">回合结束结算</span></div>
+            <div class="segmented" id="roundChoices">
+              <button class="segment" type="button" data-rounds="15"><strong>15 回合</strong><small>快棋</small></button>
+              <button class="segment is-active" type="button" data-rounds="25"><strong>25 回合</strong><small>标准</small></button>
+              <button class="segment" type="button" data-rounds="40"><strong>40 回合</strong><small>马拉松</small></button>
+            </div>
+          </div>
+
+          <div class="setup-summary" id="setupSummary"><span class="pulse-dot"></span><span>常规赛 · 25 回合 · 3 名选手 · 每人 20,000 token</span></div>
+
+          <button class="btn btn--primary btn--block" id="startBtn" type="button">
+            <span>进入机房</span>
+            <svg class="icon"><use href="#i-arrow"></use></svg>
+          </button>
+          <p class="setup-foot">空格掷骰子 · Esc 关闭面板 · 进度自动保存在本次页面</p>
+        </aside>
+      </section>
+
+      <!-- ==================== 对局 ==================== -->
+      <section class="screen screen--game" id="gameScreen">
+        <div class="ticker" id="ticker">
+          <span class="ticker__label"><span class="pulse-dot"></span> 赛场公告</span>
+          <div class="ticker__track"><span id="tickerText">行情平稳，适合抄底。</span></div>
+          <span class="ticker__round" id="tickerRound">R1</span>
+        </div>
+
+        <div class="game-layout">
+          <div class="board-col">
+            <div class="board" id="board" aria-label="大富翁棋盘">
+              <div class="board-center" id="boardCenter">
+                <div class="center-brand">
+                  <span class="center-brand__kicker">OI-OPOLY</span>
+                  <h2>信奥大富翁</h2>
+                  <p>把每一道 AC 变成资产</p>
+                </div>
+                <div class="center-meta" id="centerMeta">
+                  <span id="centerRound">ROUND 01 / 25</span>
+                  <span class="center-meta__divider"></span>
+                  <span id="centerPot">罚时池 0</span>
+                </div>
+                <div class="center-dice">
+                  <div class="die" id="dieA" data-face="6"><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span></div>
+                  <div class="die" id="dieB" data-face="6"><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span><span class="die__pip is-on"></span><span class="die__pip"></span><span class="die__pip is-on"></span></div>
+                  <span class="dice-verdict" id="diceVerdict">6 + 6 = 12 · 双数！</span>
+                </div>
+                <div class="center-tile is-flash" id="centerTile">
+                  <div class="center-tile__top">
+                    <span class="center-tile__label">当前位置</span>
+                    <span class="center-tile__code" id="centerTileCode">F02</span>
+                  </div>
+                  <strong id="centerTileName">评测机</strong>
+                  <p id="centerTileDesc">你的代码和你的运气，都要在这里排队。</p>
+                </div>
+                <div class="center-chapters" id="centerChapters" aria-label="章节行情"><span class="chapter-chip" style="--c:#57d68d" title="入门基础 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">入门基础</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#4cc3ff" title="数据结构 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">数据结构</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#9b8cff" title="排序查找 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">排序查找</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#ffd166" title="搜索 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">搜索</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#ff7b72" title="图论 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">图论</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#f78fb3" title="进阶结构 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">进阶结构</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#ff9e64" title="动态规划 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">动态规划</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span><span class="chapter-chip" style="--c:#34d3c4" title="数学与字符串 租金 ×1.00">
+        <i class="chapter-chip__dot"></i>
+        <span class="chapter-chip__name">数学与字符串</span>
+        <span class="chapter-chip__mult">×1.00</span>
+      </span></div>
+                <div class="center-market" id="centerMarket">
+                  <span class="market-label">MARKET</span>
+                  <span id="centerMarketText">行情平稳，适合抄底。</span>
+                </div>
+              </div>
+              <div class="pawn-layer" id="pawnLayer"><span class="pawn is-active" title="你" style="--pawn: #4ff0c0; left: 31.565px; top: 665.359px;">你</span><span class="pawn" title="卷王·阿珂" style="--pawn: #6cb6ff; left: 837.706px; top: 843.706px;">卷</span><span class="pawn" title="摸鱼·老陈" style="--pawn: #f0c979; left: 849.706px; top: 843.706px;">摸</span></div>
+            <button type="button" class="tile tile--corner" data-id="0" aria-label="AK 起点" style="grid-area: 11 / 11; --group: #8aa39c;">
+        <div class="tile__body">
+          <div class="tile-corner-icon">🏁</div>
+          <div class="tile__name">AK 起点</div>
+          <div class="tile__code">GO</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="1" aria-label="输入输出，入门基础，售价 1200" style="grid-area: 11 / 10; --group: #57d68d;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">输入输出</div>
+          <div class="tile__code">P1001</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">1,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="2" aria-label="随机事件" style="grid-area: 11 / 9; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">🎲</div>
+          <div class="tile__name">随机事件</div>
+          <div class="tile__code">RNG</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="3" aria-label="模拟，入门基础，售价 1400" style="grid-area: 11 / 8; --group: #57d68d;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">模拟</div>
+          <div class="tile__code">P1002</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">1,400</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="4" aria-label="罚时结算" style="grid-area: 11 / 7; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">⏱</div>
+          <div class="tile__name">罚时结算</div>
+          <div class="tile__code">TLE</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom tile--facility" data-id="5" aria-label="机房，售价 3500" style="grid-area: 11 / 6; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-facility-icon">🖥</div>
+          <div class="tile__name">机房</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__price">3,500</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="6" aria-label="枚举，入门基础，售价 1600" style="grid-area: 11 / 5; --group: #57d68d;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">枚举</div>
+          <div class="tile__code">P1003</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">1,600</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="7" aria-label="OJ 公告" style="grid-area: 11 / 4; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">📢</div>
+          <div class="tile__name">OJ 公告</div>
+          <div class="tile__code">OJ</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="8" aria-label="栈，数据结构，售价 2000" style="grid-area: 11 / 3; --group: #4cc3ff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">栈</div>
+          <div class="tile__code">P1004</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">2,000</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--bottom" data-id="9" aria-label="队列，数据结构，售价 2200" style="grid-area: 11 / 2; --group: #4cc3ff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">队列</div>
+          <div class="tile__code">P1005</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">2,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--corner tile--jail" data-id="10" aria-label="禁赛区" style="grid-area: 11 / 1; --group: #8aa39c;">
+        <div class="tile__body">
+          <div class="tile-corner-icon">🚫</div>
+          <div class="tile__name">禁赛区</div>
+          <div class="tile__code">BAN</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="11" aria-label="链表，数据结构，售价 2400" style="grid-area: 10 / 1; --group: #4cc3ff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">链表</div>
+          <div class="tile__code">P1006</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">2,400</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left tile--facility is-current" data-id="12" aria-label="评测机，售价 3500" style="grid-area: 9 / 1; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-facility-icon">⚙️</div>
+          <div class="tile__name">评测机</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__price">3,500</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="13" aria-label="排序，排序查找，售价 2800" style="grid-area: 8 / 1; --group: #9b8cff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">排序</div>
+          <div class="tile__code">P1007</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">2,800</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="14" aria-label="二分，排序查找，售价 3000" style="grid-area: 7 / 1; --group: #9b8cff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">二分</div>
+          <div class="tile__code">P1008</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">3,000</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="15" aria-label="OJ 公告" style="grid-area: 6 / 1; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">📢</div>
+          <div class="tile__name">OJ 公告</div>
+          <div class="tile__code">OJ</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="16" aria-label="前缀和，排序查找，售价 3200" style="grid-area: 5 / 1; --group: #9b8cff;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">前缀和</div>
+          <div class="tile__code">P1009</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">3,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="17" aria-label="随机事件" style="grid-area: 4 / 1; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">🎲</div>
+          <div class="tile__name">随机事件</div>
+          <div class="tile__code">RNG</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="18" aria-label="DFS，搜索，售价 3600" style="grid-area: 3 / 1; --group: #ffd166;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">DFS</div>
+          <div class="tile__code">P1010</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">3,600</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--left" data-id="19" aria-label="剪枝，搜索，售价 3800" style="grid-area: 2 / 1; --group: #ffd166;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">剪枝</div>
+          <div class="tile__code">P1011</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">3,800</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--corner" data-id="20" aria-label="AK 休息室" style="grid-area: 1 / 1; --group: #8aa39c;">
+        <div class="tile__body">
+          <div class="tile-corner-icon">☕</div>
+          <div class="tile__name">AK 休息室</div>
+          <div class="tile__code">REST</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="21" aria-label="BFS，搜索，售价 4000" style="grid-area: 1 / 2; --group: #ffd166;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">BFS</div>
+          <div class="tile__code">P1012</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">4,000</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="22" aria-label="内存超限" style="grid-area: 1 / 3; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">💾</div>
+          <div class="tile__name">内存超限</div>
+          <div class="tile__code">MLE</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="23" aria-label="最短路，图论，售价 4400" style="grid-area: 1 / 4; --group: #ff7b72;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">最短路</div>
+          <div class="tile__code">P1013</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">4,400</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="24" aria-label="最小生成树，图论，售价 4600" style="grid-area: 1 / 5; --group: #ff7b72;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">最小生成树</div>
+          <div class="tile__code">P1014</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">4,600</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top tile--facility" data-id="25" aria-label="集群，售价 3500" style="grid-area: 1 / 6; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-facility-icon">🗄</div>
+          <div class="tile__name">集群</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__price">3,500</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="26" aria-label="拓扑排序，图论，售价 4800" style="grid-area: 1 / 7; --group: #ff7b72;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">拓扑排序</div>
+          <div class="tile__code">P1015</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">4,800</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="27" aria-label="线段树，进阶结构，售价 5200" style="grid-area: 1 / 8; --group: #f78fb3;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">线段树</div>
+          <div class="tile__code">P1016</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">5,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="28" aria-label="OJ 公告" style="grid-area: 1 / 9; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">📢</div>
+          <div class="tile__name">OJ 公告</div>
+          <div class="tile__code">OJ</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--top" data-id="29" aria-label="树状数组，进阶结构，售价 5400" style="grid-area: 1 / 10; --group: #f78fb3;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">树状数组</div>
+          <div class="tile__code">P1017</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">5,400</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--corner tile--jail" data-id="30" aria-label="进入禁赛" style="grid-area: 1 / 11; --group: #8aa39c;">
+        <div class="tile__body">
+          <div class="tile-corner-icon">⛓</div>
+          <div class="tile__name">进入禁赛</div>
+          <div class="tile__code">BAN</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="31" aria-label="并查集，进阶结构，售价 5600" style="grid-area: 2 / 11; --group: #f78fb3;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">并查集</div>
+          <div class="tile__code">P1018</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">5,600</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="32" aria-label="背包，动态规划，售价 6000" style="grid-area: 3 / 11; --group: #ff9e64;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">背包</div>
+          <div class="tile__code">P1019</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">6,000</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="33" aria-label="随机事件" style="grid-area: 4 / 11; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-corner-icon" style="font-size:15px">🎲</div>
+          <div class="tile__name">随机事件</div>
+          <div class="tile__code">RNG</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="34" aria-label="区间 DP，动态规划，售价 6200" style="grid-area: 5 / 11; --group: #ff9e64;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">区间 DP</div>
+          <div class="tile__code">P1020</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">6,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right tile--facility" data-id="35" aria-label="超算，售价 3500" style="grid-area: 6 / 11; --group: #8aa39c;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile-facility-icon">🚀</div>
+          <div class="tile__name">超算</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__price">3,500</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="36" aria-label="树形 DP，动态规划，售价 6400" style="grid-area: 7 / 11; --group: #ff9e64;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">树形 DP</div>
+          <div class="tile__code">P1021</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">6,400</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="37" aria-label="数论，数学与字符串，售价 7000" style="grid-area: 8 / 11; --group: #34d3c4;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">数论</div>
+          <div class="tile__code">P1022</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">7,000</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="38" aria-label="组合数学，数学与字符串，售价 7200" style="grid-area: 9 / 11; --group: #34d3c4;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">组合数学</div>
+          <div class="tile__code">P1023</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">7,200</div>
+        </div><span class="tile__owner" hidden=""></span></button><button type="button" class="tile tile--right" data-id="39" aria-label="字符串哈希，数学与字符串，售价 7400" style="grid-area: 10 / 11; --group: #34d3c4;"><div class="tile__strip"></div>
+        <div class="tile__body">
+          <div class="tile__name">字符串哈希</div>
+          <div class="tile__code">P1024</div>
+          <div class="tile__spacer"></div>
+          <div class="tile__chips"></div>
+          <div class="tile__price">7,400</div>
+        </div><span class="tile__owner" hidden=""></span></button></div>
+            <div class="board-legend" id="boardLegend"><span class="legend-item"><i class="legend-swatch" style="--c:#57d68d"></i>入门基础</span><span class="legend-item"><i class="legend-swatch" style="--c:#4cc3ff"></i>数据结构</span><span class="legend-item"><i class="legend-swatch" style="--c:#9b8cff"></i>排序查找</span><span class="legend-item"><i class="legend-swatch" style="--c:#ffd166"></i>搜索</span><span class="legend-item"><i class="legend-swatch" style="--c:#ff7b72"></i>图论</span><span class="legend-item"><i class="legend-swatch" style="--c:#f78fb3"></i>进阶结构</span><span class="legend-item"><i class="legend-swatch" style="--c:#ff9e64"></i>动态规划</span><span class="legend-item"><i class="legend-swatch" style="--c:#34d3c4"></i>数学与字符串</span><span class="legend-item"><i class="legend-swatch" style="--c:#8aa39c"></i>算力设施</span><span class="legend-note">点击地块查看详情</span></div>
+          </div>
+
+          <aside class="sidebar">
+            <div class="side-card turn-card" id="turnCard" style="--pc: #4ff0c0;">
+      <div class="turn-card__top">
+        <span class="avatar">🧑‍💻</span>
+        <div class="turn-card__ident">
+          <div class="turn-card__name"><span class="dot"></span>你</div>
+          <span class="turn-card__meta">AT #12 · 评测机</span>
+        </div>
+        <span class="turn-badge">正在行动</span>
+      </div>
+      <div class="turn-card__tokens">
+        <div>
+          <span>TOKEN</span>
+          <strong>20,000</strong>
+        </div>
+        <div class="turn-card__net">
+          <span>总资产</span>
+          <strong>20,000</strong>
+        </div>
+      </div>
+      <div class="turn-card__foot">
+        <span class="stat-pill">地块 <b>0</b></span>
+        <span class="stat-pill">算法 <b>0</b></span>
+        <span class="stat-pill stat-pill--gold">申诉信 <b>0</b></span>
+      </div></div>
+
+            <div class="side-card action-card">
+              <div class="side-head">
+                <span class="side-kicker">ACTION</span>
+                <span class="turn-state" id="turnState">行动阶段</span>
+              </div>
+              <div class="action-buttons" id="actionButtons">
+        <button class="action-btn action-btn--gold" data-act="buy" type="button">
+          <span class="action-btn__main"><strong>买下【评测机】</strong><small>装入资产表，向路过的同学收租</small></span>
+          <span class="action-btn__side">3,500</span>
+        </button>
+        <button class="action-btn" data-act="skip-buy" type="button">
+          <span class="action-btn__main"><strong>放弃购买</strong><small>这块地会留在题库里</small></span>
+        </button></div>
+              <p class="action-hint" id="actionHint">停在这里才能购买；集齐同章节三块地后租金翻倍。</p>
+            </div>
+
+            <div class="side-card roster-card">
+              <div class="side-head">
+                <span class="side-kicker">PLAYERS</span>
+                <span class="side-note" id="rosterNote">3/3 名选手</span>
+              </div>
+              <div class="roster" id="playerList">
+        <div class="roster-row is-current" style="--pc:#4ff0c0">
+          <span class="roster-avatar">🧑‍💻</span>
+          <div class="roster-main">
+            <div class="roster-name">你<span class="tag">YOU</span></div>
+            <div class="roster-sub">地块 0 · 算法 0</div>
+          </div>
+          <div class="roster-money">
+            <strong>20,000</strong>
+            <small>资产 2w</small>
+          </div>
+        </div>
+        <div class="roster-row" style="--pc:#6cb6ff">
+          <span class="roster-avatar">🦊</span>
+          <div class="roster-main">
+            <div class="roster-name">卷王·阿珂<span class="tag">卷王</span></div>
+            <div class="roster-sub">地块 0 · 算法 0</div>
+          </div>
+          <div class="roster-money">
+            <strong>20,000</strong>
+            <small>资产 2w</small>
+          </div>
+        </div>
+        <div class="roster-row" style="--pc:#f0c979">
+          <span class="roster-avatar">🐟</span>
+          <div class="roster-main">
+            <div class="roster-name">摸鱼·老陈<span class="tag">摸鱼</span></div>
+            <div class="roster-sub">地块 0 · 算法 0</div>
+          </div>
+          <div class="roster-money">
+            <strong>20,000</strong>
+            <small>资产 2w</small>
+          </div>
+        </div></div>
+            </div>
+
+            <div class="side-card market-card">
+              <div class="side-head">
+                <span class="side-kicker">MARKET</span>
+                <span class="side-note" id="marketNote">R1</span>
+              </div>
+              <div class="market-list" id="sideMarket"><div class="market-empty">暂无行情。租金按基础值结算。</div><div class="pot-line"><span>罚时池</span><strong>0</strong></div></div>
+            </div>
+
+            <div class="side-card log-card">
+              <div class="side-head">
+                <span class="side-kicker">JUDGE LOG</span>
+                <button class="mini-btn" id="logToggle" type="button">展开</button>
+              </div>
+              <div class="game-log" id="gameLog"><div class="log-item log-item--system"><span class="log-item__round">R1</span><span class="log-item__text">比赛开始：常规赛 · 25 回合 · 3 名选手</span></div><div class="log-item log-item--info"><span class="log-item__round">R1</span><span class="log-item__text">每人 20,000 token。掷骰子行动，集齐章节后可以安装算法。</span></div><div class="log-item log-item--info"><span class="log-item__round">R1</span><span class="log-item__text">你 掷出 6 + 6 = 12（双数）。</span></div><div class="log-item log-item--info"><span class="log-item__round">R1</span><span class="log-item__text">停在了无主的【评测机】前，售价 3,500 token。</span></div></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 浮层 -->
+  <div class="toast-root" id="toastRoot" aria-live="polite"></div>
+  <div class="modal-root" id="modalRoot" hidden=""></div>
+
+  <div class="end-screen" id="endScreen" hidden="">
+    <div class="end-card">
+      <div class="end-confetti" aria-hidden="true"></div>
+      <p class="eyebrow eyebrow--center">FINAL JUDGE</p>
+      <h2 id="endTitle">比赛结束</h2>
+      <p class="end-sub" id="endSub"></p>
+      <div class="end-ranking" id="endRanking"></div>
+      <div class="end-stats" id="endStats"></div>
+      <div class="end-actions">
+        <button class="btn btn--primary" id="againBtn" type="button">再来一局</button>
+        <button class="btn btn--ghost" id="lobbyBtn" type="button">返回大厅</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/ui.js"></script>
+
+
+</body></html>
