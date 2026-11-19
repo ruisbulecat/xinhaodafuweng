@@ -1,6 +1,6 @@
 /* ============================================================
    信奥大富翁 · 数据层
-   棋盘、章节、算法、事件卡、公告、成就、AI 选手
+   棋盘、章节、算法建筑、机惨事件卡、公告、成就、AI 选手
    ============================================================ */
 (function (OI) {
   'use strict';
@@ -12,7 +12,9 @@
     jailTurns: 3,
     maxAlgos: 4,
     buildRatio: 0.5,
+    buildCostMults: [1, 1.25, 1.5, 1.8],
     sellRatio: 0.5,
+    machineCrashPay: 600,
     mortgageRatio: 0.5,
     redeemRatio: 0.55,
     facilityPrice: 3500,
@@ -83,7 +85,7 @@
 
   const GROUP_ORDER = ['basics', 'struct', 'sort', 'search', 'graph', 'advanced', 'dp', 'math'];
 
-  /* 每个章节的算法池；地块按章节内顺序轮流取 4 个作为“房子” */
+  /* 每个章节的算法池；地块按章节内顺序轮流取 4 个作为“算法建筑” */
   const GROUP_POOL = {
     basics: [
       ['前缀和', '前缀'], ['差分', '差分'], ['双指针', '双针'], ['打表', '打表'], ['递推', '递推'], ['贪心', '贪心']
@@ -114,7 +116,7 @@
   const BOARD = [
     {
       id: 0, type: 'go', name: 'AK 起点', code: 'GO', icon: '🏁',
-      desc: '每次经过领取 3,000 token。集齐一套题，从这里开始。'
+      desc: '每次经过领取 3,000 token。token 就是钱，从买下第一块地开始。'
     },
     {
       id: 1, type: 'property', group: 'basics', name: '输入输出', code: 'P1001', en: 'I/O', price: 1200,
@@ -122,7 +124,7 @@
     },
     {
       id: 2, type: 'chance', name: '随机事件', code: 'RNG', icon: '🎲',
-      desc: '赛场上什么都可能发生，尤其是你没想到的那一种。'
+      desc: '机惨、断电、写暴力被抓，赛场上什么都可能发生。'
     },
     {
       id: 3, type: 'property', group: 'basics', name: '模拟', code: 'P1002', en: 'SIMULATION', price: 1400,
@@ -142,7 +144,7 @@
     },
     {
       id: 7, type: 'chest', name: 'OJ 公告', code: 'OJ', icon: '📢',
-      desc: '公告栏里，通常只有坏消息和更好的消息。'
+      desc: '公告栏里通常只有坏消息，以及更坏的消息。'
     },
     {
       id: 8, type: 'property', group: 'struct', name: '栈', code: 'P1004', en: 'STACK', price: 2000,
@@ -154,7 +156,7 @@
     },
     {
       id: 10, type: 'jail', name: '禁赛区', code: 'BAN', icon: '🚫',
-      desc: '停赛反省。交保释金、用申诉信，或者掷出双数离开。'
+      desc: '写暴力（brute force）被裁判抓包。交罚金、用申诉信，或者掷出双数申诉离开。'
     },
     {
       id: 11, type: 'property', group: 'struct', name: '链表', code: 'P1006', en: 'LINKED LIST', price: 2400,
@@ -174,7 +176,7 @@
     },
     {
       id: 15, type: 'chest', name: 'OJ 公告', code: 'OJ', icon: '📢',
-      desc: '公告栏里，通常只有坏消息和更好的消息。'
+      desc: '公告栏里通常只有坏消息，以及更坏的消息。'
     },
     {
       id: 16, type: 'property', group: 'sort', name: '前缀和', code: 'P1009', en: 'PREFIX SUM', price: 3200,
@@ -194,7 +196,7 @@
     },
     {
       id: 20, type: 'parking', name: 'AK 休息室', code: 'REST', icon: '☕',
-      desc: '罚时池里的 token 都在这儿。停在这里可以全部拿走。'
+      desc: '罚时池里的 token 都在这儿。停在这里可以全部拿走，拿去建楼。'
     },
     {
       id: 21, type: 'property', group: 'search', name: 'BFS', code: 'P1012', en: 'BREADTH-FIRST', price: 4000,
@@ -226,15 +228,15 @@
     },
     {
       id: 28, type: 'chest', name: 'OJ 公告', code: 'OJ', icon: '📢',
-      desc: '公告栏里，通常只有坏消息和更好的消息。'
+      desc: '公告栏里通常只有坏消息，以及更坏的消息。'
     },
     {
       id: 29, type: 'property', group: 'advanced', name: '树状数组', code: 'P1017', en: 'FENWICK TREE', price: 5400,
       desc: 'lowbit 是世界上最优雅的东西。'
     },
     {
-      id: 30, type: 'goToJail', name: '进入禁赛', code: 'BAN', icon: '⛓',
-      desc: '代码里写了 while(1)，被裁判请去禁赛区。'
+      id: 30, type: 'goToJail', name: '暴力检查', code: 'BF!', icon: '🚔',
+      desc: '裁判抽查代码，看到你的三重循环摇了摇头。直接送进禁赛区。'
     },
     {
       id: 31, type: 'property', group: 'advanced', name: '并查集', code: 'P1018', en: 'UNION-FIND', price: 5600,
@@ -281,9 +283,9 @@
       effect: { type: 'collectEach', amount: 600 }
     },
     {
-      id: 'c02', icon: '💥', tone: 'bad', title: '数组越界',
-      text: '下标 -1 不是合法地址。裁判把你请进了禁赛区。',
-      effect: { type: 'jail' }
+      id: 'c02', icon: '💥', tone: 'bad', title: '暴力被查重',
+      text: '你交了一发 O(n²) 暴力，被查重系统标记为“恶意卡评测”。裁判把你请进了禁赛区。',
+      effect: { type: 'jail', reason: '写暴力（O(n²)）被查重系统标记' }
     },
     {
       id: 'c03', icon: '🧪', tone: 'bad', title: '数据加强',
@@ -292,7 +294,7 @@
     },
     {
       id: 'c04', icon: '📄', tone: 'good', title: '发现原题',
-      text: '这道题你在三年前做过。免费在随机自有地块安装 1 个算法。',
+      text: '这道题你在三年前做过。免费在随机自有地块加盖 1 层算法建筑。',
       effect: { type: 'freeBuild' }
     },
     {
@@ -336,14 +338,14 @@
       effect: { type: 'pay', amount: 700 }
     },
     {
-      id: 'c13', icon: '📜', tone: 'good', title: '免费保释',
+      id: 'c13', icon: '📜', tone: 'good', title: '免费申诉',
       text: '教练替你写好了申诉信。获得一张「申诉信」，可立即离开禁赛区。',
       effect: { type: 'getOut' }
     },
     {
       id: 'c14', icon: '🎯', tone: 'bad', title: '被出题人针对',
-      text: '你的 ID 出现在出题人的小本本上。直接进入禁赛区。',
-      effect: { type: 'jail' }
+      text: '你的 ID 出现在出题人的小本本上，理由是“一看就在写暴力”。直接进入禁赛区。',
+      effect: { type: 'jail', reason: '被出题人举报写暴力' }
     },
     {
       id: 'c15', icon: '⏳', tone: 'bad', title: '评测机排队',
@@ -364,6 +366,41 @@
       id: 'c18', icon: '📋', tone: 'bad', title: '大纲改动',
       text: '新大纲删掉了一个章节。随机章节租金下跌 20%，持续 8 回合。',
       effect: { type: 'market', mult: 0.8, rounds: 8 }
+    },
+    {
+      id: 'c19', icon: '🔌', tone: 'bad', title: '机惨 · 机房断电',
+      text: '整层楼突然断电，所有选手的算法建筑随机短路 1 层；没有建筑的选手赔偿 600 token 买保险。',
+      effect: { type: 'machineCrash', amount: 600 }
+    },
+    {
+      id: 'c20', icon: '💥', tone: 'bad', title: '暴力出奇迹',
+      text: '你交了一发 O(n³) 暴力，居然 AC 了。裁判复核后认定恶意卡评测，直接禁赛。',
+      effect: { type: 'jail', reason: '用 O(n³) 暴力恶意卡评测' }
+    },
+    {
+      id: 'c21', icon: '💧', tone: 'bad', title: '空调漏水',
+      text: '机柜上方的空调开始滴水，随机一栋算法建筑短路降 1 级；没有建筑则赔偿 800 token。',
+      effect: { type: 'destroyBuild', fallback: 800 }
+    },
+    {
+      id: 'c22', icon: '💽', tone: 'bad', title: '数据没备份',
+      text: '你只把代码存在本地。硬盘异响之后，随机一栋算法建筑降 1 级；没有建筑则损失 1,000 token。',
+      effect: { type: 'destroyBuild', fallback: 1000 }
+    },
+    {
+      id: 'c23', icon: '🔋', tone: 'good', title: 'UPS 到货',
+      text: '学校终于给机房装了 UPS。这次机惨没有波及你，还省下 800 token 电费。',
+      effect: { type: 'gain', amount: 800 }
+    },
+    {
+      id: 'c24', icon: '📄', tone: 'good', title: '机惨保险理赔',
+      text: '你给算法建筑买了保险。按建筑层数 × 200 token 理赔。',
+      effect: { type: 'gainPerBuild', amount: 200 }
+    },
+    {
+      id: 'c25', icon: '🛠', tone: 'bad', title: '隔壁装修',
+      text: '隔壁集训队开始装修，电钻精准命中你的插排。随机一栋算法建筑降 1 级；没有建筑则赔偿 700 token。',
+      effect: { type: 'destroyBuild', fallback: 700 }
     }
   ];
 
@@ -435,7 +472,7 @@
     },
     {
       id: 'b14', icon: '🧰', tone: 'good', title: '官方数据修复',
-      text: '管理员修好了数据。免费在随机自有地块安装 1 个算法。',
+      text: '管理员修好了数据。免费在随机自有地块加盖 1 层算法建筑。',
       effect: { type: 'freeBuild' }
     },
     {
@@ -447,6 +484,21 @@
       id: 'b16', icon: '🎓', tone: 'good', title: '奖学金',
       text: '你拿到了信息学特长奖学金。获得 2,000 token。',
       effect: { type: 'gain', amount: 2000 }
+    },
+    {
+      id: 'b17', icon: '🧧', tone: 'good', title: '机惨慰问金',
+      text: '你上个月刚经历机惨，教练发了慰问金。获得 900 token。',
+      effect: { type: 'gain', amount: 900 }
+    },
+    {
+      id: 'b18', icon: '🗃', tone: 'good', title: '代码已备份',
+      text: '你养成了随手 git push 的习惯。免费在随机自有地块加盖 1 层算法建筑。',
+      effect: { type: 'freeBuild' }
+    },
+    {
+      id: 'b19', icon: '🏢', tone: 'good', title: '机房搬迁补助',
+      text: '学校搬新机房，每层算法建筑补贴 150 token。',
+      effect: { type: 'gainPerBuild', amount: 150 }
     }
   ];
 
@@ -471,10 +523,12 @@
 
   const ACHIEVEMENTS = [
     { id: 'first_buy', name: '第一块地', icon: '🏠', desc: '买下你的第一块算法地块。' },
-    { id: 'builder', name: '基建狂魔', icon: '🧱', desc: '一局内累计安装 10 个算法。' },
+    { id: 'builder', name: '基建狂魔', icon: '🧱', desc: '一局内累计建造 10 层算法建筑。' },
     { id: 'monopoly', name: '章节垄断', icon: '🗺', desc: '收齐任意一个章节的全部地块。' },
-    { id: 'full_stack', name: '满配', icon: '✨', desc: '让一块地同时运行 4 个算法。' },
+    { id: 'full_stack', name: '满配', icon: '✨', desc: '让一块地盖满 4 层算法建筑。' },
     { id: 'jailbreak', name: '申诉成功', icon: '⚖️', desc: '在禁赛区掷出双数并离开。' },
+    { id: 'brute', name: '暴力分子', icon: '💥', desc: '因为写暴力被禁赛一次。' },
+    { id: 'machine_crash', name: '机惨亲历者', icon: '🔌', desc: '亲历一次机房惨案。' },
     { id: 'cards', name: '事件体质', icon: '🃏', desc: '一局内抽到 5 张随机事件卡。' },
     { id: 'rich', name: 'token 富翁', icon: '💎', desc: '持有的 token 达到 50,000。' },
     { id: 'winner', name: 'AK 之王', icon: '👑', desc: '赢下一局比赛。' },
@@ -499,6 +553,7 @@
       tile.color = group.color;
       tile.rent = RENT_RATIO.map((r) => roundTo(tile.price * r, 10));
       tile.buildCost = roundTo(tile.price * CONFIG.buildRatio, 100);
+      tile.buildCosts = CONFIG.buildCostMults.map((m) => roundTo(tile.buildCost * m, 100));
       tile.pool = GROUP_POOL[tile.group];
       tile.algoOffset = order * 1;
       tile.algoSet = [];

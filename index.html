@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="信奥大富翁：买下算法地块、造满算法房子、避开禁赛区，在 40 格机房里成为 token 最多的选手。">
+  <meta name="description" content="信奥大富翁：token 是钱，算法是建筑。买下算法地块、盖满四层、躲开机惨，写暴力会被禁赛——在 40 格机房里成为 token 最多的选手。">
   <meta name="theme-color" content="#05090b">
   <title>信奥大富翁 · OI-OPOLY</title>
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
@@ -101,7 +101,7 @@
       </button>
       <div class="topbar__right">
         <div class="bankroll" role="status" aria-live="polite">
-          <span class="bankroll__label">我的 token</span>
+          <span class="bankroll__label">钱包 · token</span>
           <strong class="bankroll__value" id="topbarTokens">20,000</strong>
         </div>
         <button class="icon-btn" id="soundBtn" type="button" aria-label="开关音效" title="开关音效">
@@ -122,22 +122,22 @@
         <div class="hero">
           <p class="eyebrow"><span class="eyebrow__line"></span> WELCOME TO THE MACHINE ROOM</p>
           <h1 class="hero__title">算法不会背叛你，<br><em>但骰子会。</em></h1>
-          <p class="hero__desc">四名选手，四十格机房。用 token 买下算法地块、造满算法房子、向路过的同学收租。被 hack、被禁赛、被随机事件背刺——直到有人 AK 全场，或者破产退役。</p>
+          <p class="hero__desc">token 就是钱，算法就是建筑。买下算法地块，在上面盖起一层层算法建筑；走到自家建筑还能继续加盖。机惨、断电、空调漏水随时可能让整层楼短路，而写了暴力？裁判会让你进禁赛区反省。</p>
           <div class="hero__features">
             <div class="feature">
               <span class="feature__icon"><svg class="icon"><use href="#i-card"></use></svg></span>
-              <div><strong>24 块算法地产</strong><small>从输入输出到字符串哈希</small></div>
+              <div><strong>24 块算法地块</strong><small>从输入输出到字符串哈希</small></div>
             </div>
             <div class="feature">
               <span class="feature__icon"><svg class="icon"><use href="#i-spark"></use></svg></span>
-              <div><strong>随机事件</strong><small>事件卡与实时市场行情</small></div>
+              <div><strong>算法建筑</strong><small>最多 4 层，落地就能升级</small></div>
             </div>
             <div class="feature">
               <span class="feature__icon"><svg class="icon"><use href="#i-jail"></use></svg></span>
-              <div><strong>禁赛机制</strong><small>申诉、保释，或掷出双数</small></div>
+              <div><strong>机惨与禁赛</strong><small>断电、漏水、写暴力被抓</small></div>
             </div>
           </div>
-          <p class="hero__quote">“这道题我不会，但我会买下它的出题人。”</p>
+          <p class="hero__quote">“暴力出奇迹，禁赛出经验。”</p>
         </div>
 
         <aside class="setup-panel">
@@ -198,7 +198,7 @@
             <span>进入机房</span>
             <svg class="icon"><use href="#i-arrow"></use></svg>
           </button>
-          <p class="setup-foot">空格掷骰子 · Esc 关闭面板 · 进度自动保存在本次页面</p>
+          <p class="setup-foot">空格掷骰子 · 走到自家建筑可升级 · 刷新页面会重开对局</p>
         </aside>
       </section>
 
@@ -217,7 +217,7 @@
                 <div class="center-brand">
                   <span class="center-brand__kicker">OI-OPOLY</span>
                   <h2>信奥大富翁</h2>
-                  <p>把每一道 AC 变成资产</p>
+                  <p>token 是钱，算法是楼</p>
                 </div>
                 <div class="center-meta" id="centerMeta">
                   <span id="centerRound">ROUND 01 / 25</span>
@@ -235,7 +235,7 @@
                     <span class="center-tile__code" id="centerTileCode">GO</span>
                   </div>
                   <strong id="centerTileName">AK 起点</strong>
-                  <p id="centerTileDesc">向所有选手收取一次过路费之前，先领 3,000 token。</p>
+                  <p id="centerTileDesc">每次经过领取 3,000 token。token 就是钱，从买下第一块地开始。</p>
                 </div>
                 <div class="center-chapters" id="centerChapters" aria-label="章节行情"></div>
                 <div class="center-market" id="centerMarket">
@@ -257,7 +257,7 @@
                 <span class="turn-state" id="turnState">等待掷骰</span>
               </div>
               <div class="action-buttons" id="actionButtons"></div>
-              <p class="action-hint" id="actionHint">掷出两颗骰子，沿顺时针方向前进。</p>
+              <p class="action-hint" id="actionHint">掷出两颗骰子，沿顺时针方向前进；走到自家建筑可以升级。</p>
             </div>
 
             <div class="side-card roster-card">

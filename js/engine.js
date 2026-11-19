@@ -1,6 +1,6 @@
 /* ============================================================
    信奥大富翁 · 规则引擎
-   回合、移动、租金、算法、禁赛、事件卡、破产与 AI 决策
+   回合、移动、租金、算法建筑、禁赛、机惨事件、破产与 AI 决策
    ============================================================ */
 (function (OI) {
   'use strict';
@@ -26,7 +26,7 @@
         tag: '选手', isHuman: true, isAI: false,
         tokens: diff.start, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
         minTokens: diff.start,
-        stats: { rentPaid: 0, rentEarned: 0, builds: 0, cards: 0, buys: 0 }
+        stats: { rentPaid: 0, rentEarned: 0, builds: 0, upgrades: 0, cards: 0, buys: 0 }
       }];
 
       const aiCount = count - 1;
@@ -38,7 +38,7 @@
           isHuman: false, isAI: true, ai: Object.assign({}, template.ai),
           tokens: diff.start, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
           minTokens: diff.start,
-          stats: { rentPaid: 0, rentEarned: 0, builds: 0, cards: 0, buys: 0 }
+          stats: { rentPaid: 0, rentEarned: 0, builds: 0, upgrades: 0, cards: 0, buys: 0 }
         });
       }
 
@@ -75,7 +75,8 @@
       };
 
       this.log(`比赛开始：${diff.name} · ${rounds} 回合 · ${players.length} 名选手`, 'system');
-      this.log(`每人 ${util.fmt(diff.start)} token。掷骰子行动，集齐章节后可以安装算法。`, 'info');
+      this.log(`每人 ${util.fmt(diff.start)} token。token 就是钱：买地、建楼、交租都靠它。`, 'info');
+      this.log('走到自家算法建筑上可以直接升级；写暴力会被禁赛。', 'info');
       return this.state;
     },
 
@@ -117,10 +118,47 @@
           total += prop.mortgaged ? Math.round(tile.price * CONFIG.mortgageRatio) : tile.price;
         } else {
           total += prop.mortgaged ? Math.round(tile.price * CONFIG.mortgageRatio)
-            : tile.price + prop.algos.length * tile.buildCost;
+            : tile.price + this.investedIn(tile.id);
         }
       });
       return Math.round(total);
+    },
+    /* 算法建筑：升级费用随层数递增，拆除返还顶层造价的一半 */
+    upgradeCost(tileId) {
+      const tile = BOARD[tileId];
+      const prop = this.state.props[tileId];
+      if (!tile || !prop) return 0;
+      const level = prop.algos.length;
+      if (level >= CONFIG.maxAlgos) return 0;
+      const costs = tile.buildCosts || [tile.buildCost];
+      return costs[Math.min(level, costs.length - 1)] || tile.buildCost || 0;
+    },
+    investedIn(tileId) {
+      const tile = BOARD[tileId];
+      const prop = this.state.props[tileId];
+      if (!tile || !prop) return 0;
+      const costs = tile.buildCosts || [tile.buildCost];
+      let total = 0;
+      for (let i = 0; i < prop.algos.length; i++) {
+        total += costs[i] || tile.buildCost || 0;
+      }
+      return total;
+    },
+    lastBuildCost(tileId) {
+      const tile = BOARD[tileId];
+      const prop = this.state.props[tileId];
+      if (!tile || !prop || !prop.algos.length) return 0;
+      const costs = tile.buildCosts || [tile.buildCost];
+      return costs[Math.min(prop.algos.length - 1, costs.length - 1)] || tile.buildCost || 0;
+    },
+    costAtLevel(tileId, level) {
+      const tile = BOARD[tileId];
+      if (!tile) return 0;
+      const costs = tile.buildCosts || [tile.buildCost];
+      return costs[Math.min(Math.max(level - 1, 0), costs.length - 1)] || tile.buildCost || 0;
+    },
+    buildingCount(playerId) {
+      return this.ownedTiles(playerId).reduce((n, tile) => n + this.state.props[tile.id].algos.length, 0);
     },
     marketMult(groupId) {
       const value = this.state.market
@@ -203,7 +241,13 @@
           return { kind: 'property', action: 'buy', tile, price: tile.price, prop };
         }
         if (prop.owner === player.id) {
-          return { kind: 'property', action: 'self', tile, prop };
+          return {
+            kind: 'property', action: 'self', tile, prop,
+            canUpgrade: this.canBuild(player, tile.id),
+            cost: this.upgradeCost(tile.id),
+            atMax: prop.algos.length >= CONFIG.maxAlgos,
+            level: prop.algos.length
+          };
         }
         if (prop.mortgaged) {
           return { kind: 'property', action: 'mortgaged', tile, prop, owner: this.player(prop.owner) };
@@ -242,23 +286,23 @@
       if (!tile || !prop || tile.type !== 'property') return false;
       if (prop.owner !== player.id || prop.mortgaged) return false;
       if (prop.algos.length >= CONFIG.maxAlgos) return false;
-      if (!free) {
-        if (!this.ownsGroup(player.id, tile.group)) return false;
-        if (player.tokens < tile.buildCost) return false;
-      }
+      if (!free && player.tokens < this.upgradeCost(tileId)) return false;
       return true;
     },
     build(player, tileId, free) {
       if (!this.canBuild(player, tileId, free)) return null;
       const tile = BOARD[tileId];
       const prop = this.state.props[tileId];
-      if (!free) player.tokens -= tile.buildCost;
+      const cost = free ? 0 : this.upgradeCost(tileId);
+      const level = prop.algos.length + 1;
+      if (!free) player.tokens -= cost;
       const algo = tile.algoSet[prop.algos.length];
       prop.algos.push(algo);
       player.stats.builds += 1;
+      if (level > 1) player.stats.upgrades += 1;
       player.minTokens = Math.min(player.minTokens, player.tokens);
       this.log(
-        `${player.name} 在【${tile.name}】安装了算法【${algo.name}】${free ? '（免费）' : `，支付 ${util.fmt(tile.buildCost)} token`}。`,
+        `${player.name} 在【${tile.name}】${level === 1 ? '建造' : '升级'}了 Lv.${level} 算法建筑【${algo.name}】${free ? '（免费）' : `，支付 ${util.fmt(cost)} token`}。`,
         'good'
       );
       return algo;
@@ -267,10 +311,10 @@
       const tile = BOARD[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || prop.owner !== player.id || !prop.algos.length || prop.mortgaged) return 0;
+      const refund = Math.round(this.costAtLevel(tileId, prop.algos.length) * CONFIG.sellRatio);
       const algo = prop.algos.pop();
-      const refund = Math.round(tile.buildCost * CONFIG.sellRatio);
       player.tokens += refund;
-      this.log(`${player.name} 卖掉【${tile.name}】的算法【${algo.name}】，回收 ${util.fmt(refund)} token。`, 'warn');
+      this.log(`${player.name} 拆除了【${tile.name}】的 Lv.${prop.algos.length + 1} 算法建筑【${algo.name}】，回收 ${util.fmt(refund)} token。`, 'warn');
       return refund;
     },
     mortgage(player, tileId) {
@@ -303,16 +347,16 @@
     liquidate(player, needed) {
       let raised = 0;
       const actions = [];
-      const props = this.ownedTiles(player.id).sort((a, b) => b.buildCost - a.buildCost);
+      const props = this.ownedTiles(player.id).sort((a, b) => this.investedIn(b.id) - this.investedIn(a.id));
 
       props.forEach((tile) => {
         const prop = this.state.props[tile.id];
         while (raised < needed && prop.algos.length && prop.owner === player.id) {
+          const refund = Math.round(this.costAtLevel(tile.id, prop.algos.length) * CONFIG.sellRatio);
           const algo = prop.algos.pop();
-          const refund = Math.round(tile.buildCost * CONFIG.sellRatio);
           player.tokens += refund;
           raised += refund;
-          actions.push({ text: `变卖【${tile.name}】的算法【${algo.name}】，回收 ${util.fmt(refund)}`, type: 'warn' });
+          actions.push({ text: `拆除【${tile.name}】的算法建筑【${algo.name}】，回收 ${util.fmt(refund)}`, type: 'warn' });
         }
       });
 
@@ -414,6 +458,48 @@
       this.log(`${player.name} 向 ${rival.name} 支付 ${util.fmt(res.paid)} token。`, 'bad');
       return { rival, paid: res.paid, bankrupt: res.bankrupt };
     },
+    gainPerBuild(player, amount) {
+      const count = this.buildingCount(player.id);
+      const total = count * amount;
+      if (total > 0) this.gain(player, total);
+      this.log(`${player.name} 的 ${count} 层算法建筑带来 ${util.fmt(total)} token 收益。`, total > 0 ? 'good' : 'info');
+      return total;
+    },
+    /* 机惨：随机损坏玩家 1 层算法建筑；没有建筑的玩家赔钱 */
+    destroyBuild(player, fallback) {
+      if (!player || !player.alive) {
+        return { player, tile: null, algo: null, level: 0, paid: 0, bankrupt: false };
+      }
+      const built = this.ownedTiles(player.id).filter((tile) => this.state.props[tile.id].algos.length > 0);
+      if (!built.length) {
+        const amount = Math.max(0, Number(fallback) || 0);
+        let paid = 0;
+        let bankrupt = false;
+        if (amount > 0) {
+          const res = this.charge(player, amount, null);
+          paid = res.paid;
+          bankrupt = res.bankrupt;
+          this.log(`${player.name} 没有算法建筑可损坏，机惨赔偿 ${util.fmt(paid)} token。`, 'bad');
+        } else {
+          this.log(`${player.name} 没有算法建筑，成功躲过机惨。`, 'info');
+        }
+        return { player, tile: null, algo: null, level: 0, paid, bankrupt };
+      }
+      const tile = util.pick(built);
+      const prop = this.state.props[tile.id];
+      const level = prop.algos.length;
+      const algo = prop.algos.pop();
+      this.log(`💥 机惨：${player.name} 的【${tile.name}】Lv.${level} 建筑【${algo.name}】损坏，降为 Lv.${prop.algos.length}。`, 'bad');
+      return { player, tile, algo, level, paid: 0, bankrupt: false };
+    },
+    machineCrash(fallback) {
+      this.log('🔌 机房惨案：整层楼突然断电，所有选手的算法建筑随机损坏。', 'system');
+      const results = [];
+      this.state.players.filter((p) => p.alive).forEach((p) => {
+        results.push(this.destroyBuild(p, fallback));
+      });
+      return results;
+    },
 
     /* ---------------- 禁赛 ---------------- */
     sendToJail(player, reason) {
@@ -421,7 +507,7 @@
       player.inJail = true;
       player.jailTurns = 0;
       this.state.doubles = 0;
-      this.log(`${player.name} 被送进禁赛区${reason ? '：' + reason : ''}。`, 'bad');
+      this.log(`${player.name} 被送进禁赛区：${reason || '写暴力被裁判查重'}。`, 'bad');
     },
     jailRoll(player) {
       const roll = this.roll();
@@ -438,7 +524,7 @@
         if (res.paid > 0) this.state.pot += res.paid;
         player.inJail = false;
         player.jailTurns = 0;
-        this.log(`${player.name} 三次申诉失败，强制缴纳保释金 ${util.fmt(res.paid)} token 后离开。`, 'warn');
+        this.log(`${player.name} 三次申诉失败，强制缴纳罚金 ${util.fmt(res.paid)} token 后离开。`, 'warn');
         return { roll, freed: !res.bankrupt, forced: true, bankrupt: res.bankrupt, paid: res.paid };
       }
       this.log(`${player.name} 申诉失败（${roll.a}+${roll.b}），还要再等 ${CONFIG.jailTurns - player.jailTurns} 回合。`, 'warn');
@@ -450,7 +536,7 @@
       player.inJail = false;
       player.jailTurns = 0;
       if (res.paid > 0) this.state.pot += res.paid;
-      this.log(`${player.name} 缴纳保释金 ${util.fmt(res.paid)} token，离开禁赛区。`, 'warn');
+      this.log(`${player.name} 缴纳罚金 ${util.fmt(res.paid)} token，离开禁赛区。`, 'warn');
       return res;
     },
     useGetOut(player) {
@@ -530,7 +616,7 @@
           return { done: true };
         }
         case 'jail': {
-          this.sendToJail(player, '事件卡');
+          this.sendToJail(player, effect.reason || '写暴力被裁判查重');
           return { done: true, jailed: true };
         }
         case 'getOut': {
@@ -549,6 +635,19 @@
         case 'freeBuild': {
           const algo = this.freeBuildRandom(player);
           return { done: true, algo };
+        }
+        case 'destroyBuild': {
+          const destroyed = this.destroyBuild(player, effect.fallback || CONFIG.machineCrashPay);
+          return { done: true, destroyed, bankrupt: destroyed.bankrupt };
+        }
+        case 'machineCrash': {
+          const crashed = this.machineCrash(effect.amount || CONFIG.machineCrashPay);
+          const bankrupt = crashed.some((r) => r.bankrupt);
+          return { done: true, machineCrash: crashed, bankrupt };
+        }
+        case 'gainPerBuild': {
+          const amount = this.gainPerBuild(player, effect.amount);
+          return { done: true, amount };
         }
         case 'market': {
           const entry = this.randomMarket(effect.mult, effect.rounds);
@@ -684,7 +783,7 @@
       const targets = this.ownedTiles(player.id).filter((t) => this.canBuild(player, t.id));
       if (!targets.length) return null;
       const reserve = Math.max(3000, player.tokens * (ai.reserve || 0.15));
-      if (player.tokens - targets[0].buildCost < reserve) return null;
+      if (player.tokens - this.upgradeCost(targets[0].id) < reserve) return null;
       let chance = (ai.build || 0.6) * (this.state.aiFactor || 1);
       if (player.tokens > 30000) chance += 0.15;
       if (Math.random() > util.clamp(chance, 0.1, 0.95)) return null;
@@ -697,6 +796,14 @@
       const ai = player.ai || {};
       if (player.tokens > CONFIG.jailFine + 8000 && Math.random() < (ai.jailPay || 0.4)) return 'pay';
       return 'roll';
+    },
+    aiShouldUpgrade(player, tileId) {
+      if (!this.canBuild(player, tileId)) return false;
+      const ai = player.ai || {};
+      const cost = this.upgradeCost(tileId);
+      const reserve = Math.max(2200, player.tokens * (ai.reserve || 0.15));
+      if (player.tokens - cost < reserve) return false;
+      return Math.random() < util.clamp((ai.build || 0.6) * 1.05, 0.15, 0.95);
     }
   };
 

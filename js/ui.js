@@ -19,6 +19,7 @@
   let selected = { diff: 'normal', count: 3, rounds: 25 };
   let busy = false;
   let pendingBuy = null;
+  let pendingUpgrade = null;
   let aiTimer = null;
   let modalClose = null;
   let endShown = false;
@@ -183,6 +184,7 @@
     endShown = false;
     busy = false;
     pendingBuy = null;
+    pendingUpgrade = null;
     logCursor = 0;
     autoPlayed = false;
     dom.gameLog.innerHTML = '';
@@ -211,6 +213,7 @@
     stopAutopilot();
     busy = false;
     pendingBuy = null;
+    pendingUpgrade = null;
     dom.endScreen.hidden = true;
     dom.gameScreen.hidden = true;
     dom.setupScreen.hidden = false;
@@ -506,9 +509,9 @@
     if (!p) return;
     const tile = D.BOARD[p.pos];
     const owned = Game.ownedTiles(p.id);
-    const algoCount = owned.reduce((n, t) => n + Game.state.props[t.id].algos.length, 0);
+    const buildingCount = Game.buildingCount(p.id);
     const isAI = !p.isHuman;
-    const badge = p.inJail ? '<span class="turn-badge is-banned">禁赛中</span>'
+    const badge = p.inJail ? '<span class="turn-badge is-banned">暴力禁赛中</span>'
       : isAI ? `<span class="turn-badge is-ai">${p.tag}</span>` : '<span class="turn-badge">正在行动</span>';
 
     dom.turnCard.style.setProperty('--pc', p.color);
@@ -517,13 +520,13 @@
         <span class="avatar">${p.icon}</span>
         <div class="turn-card__ident">
           <div class="turn-card__name"><span class="dot"></span>${util.escapeHtml(p.name)}</div>
-          <span class="turn-card__meta">${p.inJail ? 'BANNED · ' : ''}AT #${p.pos} · ${util.escapeHtml(tile.name)}</span>
+          <span class="turn-card__meta">${p.inJail ? 'BANNED · 暴力代码审查中' : `AT #${p.pos} · ${util.escapeHtml(tile.name)}`}</span>
         </div>
         ${badge}
       </div>
       <div class="turn-card__tokens">
         <div>
-          <span>TOKEN</span>
+          <span>现金 · TOKEN</span>
           <strong>${util.fmt(p.tokens)}</strong>
         </div>
         <div class="turn-card__net">
@@ -533,7 +536,7 @@
       </div>
       <div class="turn-card__foot">
         <span class="stat-pill">地块 <b>${owned.length}</b></span>
-        <span class="stat-pill">算法 <b>${algoCount}</b></span>
+        <span class="stat-pill">建筑 <b>${buildingCount}</b> 层</span>
         <span class="stat-pill stat-pill--gold">申诉信 <b>${p.getOut}</b></span>
       </div>`;
   }
@@ -552,6 +555,7 @@
       el.classList.toggle('is-mortgaged', !!(prop && prop.mortgaged));
       el.classList.toggle('is-current', !!current && current.pos === tile.id && !st.over);
       el.classList.toggle('has-algos', !!(prop && prop.algos.length));
+      el.classList.toggle('is-maxed', !!(prop && prop.algos.length >= D.CONFIG.maxAlgos));
 
       if (owner) {
         el.style.setProperty('--owner-color', owner.color);
@@ -564,10 +568,17 @@
       }
 
       if (refs.chips && prop) {
-        refs.chips.innerHTML = prop.algos.map((a) => `<span class="tile__chip">${util.escapeHtml(a.short)}</span>`).join('');
+        refs.chips.innerHTML = prop.algos.map((a, i) => `<span class="tile__chip" title="Lv.${i + 1} ${util.escapeHtml(a.name)}">${util.escapeHtml(a.short)}</span>`).join('');
       }
       if (refs.price) {
-        refs.price.textContent = util.fmt(tile.price);
+        const level = prop ? prop.algos.length : 0;
+        refs.price.textContent = level > 0 ? `Lv.${level}` : util.fmt(tile.price);
+        refs.price.title = level > 0 ? `${level} 层算法建筑` : `售价 ${util.fmt(tile.price)} token`;
+      }
+      if (tile.type === 'property') {
+        const level = prop ? prop.algos.length : 0;
+        const rent = owner ? Game.rentFor(tile.id, 7) : 0;
+        el.setAttribute('aria-label', `${tile.name}，${level > 0 ? `Lv.${level} 算法建筑` : '空地'}，${owner ? `租金 ${util.fmt(rent)} token` : `售价 ${util.fmt(tile.price)} token`}`);
       }
     });
   }
@@ -577,9 +588,11 @@
     dom.rosterNote.textContent = `${Game.alivePlayers().length}/${st.players.length} 名选手`;
     dom.playerList.innerHTML = st.players.map((p, i) => {
       const owned = Game.ownedTiles(p.id);
-      const algoCount = owned.reduce((n, t) => n + st.props[t.id].algos.length, 0);
+      const buildingCount = Game.buildingCount(p.id);
       const isCurrent = st.current === i && !st.over;
-      const status = !p.alive ? '已退役' : p.inJail ? `禁赛中 · ${D.CONFIG.jailTurns - p.jailTurns} 次申诉机会` : `地块 ${owned.length} · 算法 ${algoCount}`;
+      const status = !p.alive ? '已退役' : p.inJail
+        ? `暴力禁赛中 · ${D.CONFIG.jailTurns - p.jailTurns} 次申诉机会`
+        : `地块 ${owned.length} · 建筑 ${buildingCount} 层`;
       return `
         <div class="roster-row${isCurrent ? ' is-current' : ''}${p.alive ? '' : ' is-dead'}" style="--pc:${p.color}">
           <span class="roster-avatar">${p.icon}</span>
@@ -661,7 +674,7 @@
     if (tile.type === 'property') {
       const prop = Game.state && Game.state.props[tile.id];
       const owner = prop && prop.owner ? Game.player(prop.owner) : null;
-      if (owner) desc = `${owner.name} 持有 · 当前租金 ${util.fmt(Game.rentFor(tile.id, 7))} token。`;
+      if (owner) desc = `${owner.name} 持有 · Lv.${prop.algos.length} 算法建筑 · 当前租金 ${util.fmt(Game.rentFor(tile.id, 7))} token。`;
     } else if (tile.type === 'facility') {
       const prop = Game.state && Game.state.props[tile.id];
       const owner = prop && prop.owner ? Game.player(prop.owner) : null;
@@ -682,6 +695,36 @@
     void el.offsetWidth;
     el.classList.add('is-landing');
     setTimeout(() => el.classList.remove('is-landing'), 800);
+  }
+
+  function highlightBuild(tileId) {
+    const el = tileEls[tileId];
+    if (!el) return;
+    el.classList.remove('is-upgraded');
+    void el.offsetWidth;
+    el.classList.add('is-upgraded');
+    setTimeout(() => el.classList.remove('is-upgraded'), 900);
+  }
+
+  function flashDisaster(tileId) {
+    const el = tileEls[tileId];
+    if (!el) return;
+    el.classList.remove('is-disaster');
+    void el.offsetWidth;
+    el.classList.add('is-disaster');
+    setTimeout(() => el.classList.remove('is-disaster'), 1000);
+  }
+
+  function crashBoard() {
+    dom.board.classList.remove('is-crashing');
+    void dom.board.offsetWidth;
+    dom.board.classList.add('is-crashing');
+    setTimeout(() => dom.board.classList.remove('is-crashing'), 700);
+    if (util.reducedMotion()) return;
+    const tiles = D.BOARD.filter((t) => t.type === 'property').map((t) => t.id);
+    util.shuffle(tiles).slice(0, 7).forEach((id, i) => {
+      setTimeout(() => flashDisaster(id), i * 55);
+    });
   }
 
   /* ============================================================
@@ -707,7 +750,7 @@
       dom.turnState.textContent = 'AI 行动中';
     } else if (p.inJail) {
       dom.turnState.classList.add('is-banned');
-      dom.turnState.textContent = '禁赛中';
+      dom.turnState.textContent = '暴力禁赛中';
     } else if (st.phase === 'roll') {
       dom.turnState.textContent = '等待掷骰';
     } else {
@@ -716,7 +759,7 @@
 
     if (!isHuman) {
       dom.actionButtons.innerHTML = '<div class="action-empty">对手正在计算最优解……<br>你可以点击地块查看行情。</div>';
-      dom.actionHint.textContent = p.inJail ? '对手正在禁赛区申诉。' : '等待对手掷骰与结算。';
+      dom.actionHint.textContent = p.inJail ? '对手正在为暴力代码写申诉信。' : '等待对手掷骰与建造。';
       return;
     }
 
@@ -740,14 +783,14 @@
         <span class="action-btn__key">SPACE</span>
       </button>`);
       buttons.push(`<button class="action-btn" data-act="jail-pay" type="button" ${canPay ? '' : 'disabled'}>
-        <span class="action-btn__main"><strong>缴纳保释金</strong><small>${canPay ? '立刻离开禁赛区，然后正常掷骰' : 'token 不足，无法保释'}</small></span>
+        <span class="action-btn__main"><strong>缴纳罚金</strong><small>${canPay ? '立刻离开禁赛区，然后正常掷骰' : 'token 不足，无法缴纳'}</small></span>
         <span class="action-btn__side">${util.fmt(D.CONFIG.jailFine)}</span>
       </button>`);
       buttons.push(`<button class="action-btn action-btn--danger" data-act="end" type="button">
         <span class="action-btn__main"><strong>放弃申诉</strong><small>保留在禁赛区，结束本回合</small></span>
       </button>`);
       dom.actionButtons.innerHTML = buttons.join('');
-      dom.actionHint.innerHTML = `还剩 <b>${D.CONFIG.jailTurns - p.jailTurns}</b> 次申诉机会；三次失败会被强制保释。`;
+      dom.actionHint.innerHTML = `写暴力被抓。还剩 <b>${D.CONFIG.jailTurns - p.jailTurns}</b> 次申诉机会；三次失败会被强制缴纳罚金。`;
       return;
     }
 
@@ -777,8 +820,33 @@
           <span class="action-btn__main"><strong>放弃购买</strong><small>这块地会留在题库里</small></span>
         </button>`;
       dom.actionHint.textContent = isFacility
-        ? '算力设施没有算法槽；过路费 = 120 × 骰子点数 × 你持有的设施数。'
+        ? '算力设施没有建筑位；过路费 = 120 × 骰子点数 × 你持有的设施数。'
         : '停在这里才能购买；集齐同章节三块地后租金翻倍。';
+      return;
+    }
+
+    if (pendingUpgrade != null) {
+      const tile = D.BOARD[pendingUpgrade];
+      const prop = st.props[pendingUpgrade];
+      const level = prop.algos.length;
+      const cost = Game.upgradeCost(pendingUpgrade);
+      const afford = p.tokens >= cost;
+      const nextAlgo = tile.algoSet[level];
+      const nextRent = Game.rentTable(pendingUpgrade)[Math.min(4, level + 1)];
+      const verb = level === 0 ? '建造' : '升级';
+      dom.actionButtons.innerHTML = `
+        <button class="action-btn action-btn--gold" data-act="upgrade" type="button" ${afford ? '' : 'disabled'}>
+          <span class="action-btn__main"><strong>${verb} Lv.${level + 1}【${util.escapeHtml(nextAlgo ? nextAlgo.name : '算法建筑')}】</strong><small>${afford ? `租金 ${util.fmt(Game.rentFor(pendingUpgrade, 7))} → ${util.fmt(nextRent)} token` : 'token 不足，先去收租'}</small></span>
+          <span class="action-btn__side">${util.fmt(cost)}</span>
+        </button>
+        <button class="action-btn" data-act="skip-upgrade" type="button">
+          <span class="action-btn__main"><strong>暂时不动</strong><small>保留 token，建筑维持 Lv.${level}</small></span>
+        </button>
+        <button class="action-btn" data-act="end" type="button">
+          <span class="action-btn__main"><strong>结束回合</strong><small>交给下一位选手</small></span>
+          <span class="action-btn__key">↩</span>
+        </button>`;
+      dom.actionHint.innerHTML = `停在自家【${util.escapeHtml(tile.name)}】上，可以直接加盖。升级费用随层数递增，拆除只返还 <b>50%</b>。`;
       return;
     }
 
@@ -795,7 +863,7 @@
 
     if (buildables.length) {
       buttons.push(`<button class="action-btn action-btn--gold" data-act="build-menu" type="button">
-        <span class="action-btn__main"><strong>安装算法</strong><small>${buildables.length} 块地可以升级，租金立刻上涨</small></span>
+        <span class="action-btn__main"><strong>建造 / 升级算法建筑</strong><small>${buildables.length} 块地可以加盖，租金立刻上涨</small></span>
         <span class="action-btn__side">${buildables.length}</span>
       </button>`);
     }
@@ -807,11 +875,11 @@
 
     dom.actionButtons.innerHTML = buttons.join('');
     if (p.inJail) {
-      dom.actionHint.textContent = '你被禁赛了，本回合只能结束。下回合可以继续申诉。';
+      dom.actionHint.textContent = '写暴力被禁赛，本回合只能结束。下回合可以继续申诉。';
     } else if (buildables.length) {
-      dom.actionHint.innerHTML = '点击地块可以查看租金表；<b>集齐同章节</b>才能安装算法。';
+      dom.actionHint.innerHTML = '点击地块查看租金表；<b>走到自家建筑上</b>可以直接升级，集齐同章节租金 ×2。';
     } else {
-      dom.actionHint.textContent = '点击棋盘上的地块，可以查看租金、算法和抵押状态。';
+      dom.actionHint.textContent = '点击棋盘上的地块，可以查看建筑层数、租金和抵押状态。';
     }
   }
 
@@ -825,6 +893,8 @@
       case 'end': humanEndTurn(); break;
       case 'buy': humanBuy(); break;
       case 'skip-buy': humanSkipBuy(); break;
+      case 'upgrade': humanUpgrade(); break;
+      case 'skip-upgrade': humanSkipUpgrade(); break;
       case 'build-menu': openBuildMenu(); break;
       case 'jail-roll': humanJailRoll(); break;
       case 'jail-pay': humanJailPay(); break;
@@ -877,6 +947,7 @@
     if (st.over) { showEnd(st.endReason); return; }
 
     pendingBuy = null;
+    pendingUpgrade = null;
     const p = Game.current();
     st.phase = p.inJail ? 'jail' : 'roll';
     if (p.isHuman) {
@@ -901,6 +972,7 @@
 
     busy = true;
     pendingBuy = null;
+    pendingUpgrade = null;
     st.phase = 'roll';
     renderActions();
     try {
@@ -910,9 +982,10 @@
       await animateDice(roll.a, roll.b);
 
       if (st.doubles >= 3) {
-        Game.sendToJail(p, '连续三次双数');
+        Game.sendToJail(p, '连续三次双数，被判定为随机化暴力');
         sound.play('jail');
-        toast('连续三次双数，裁判把你请进了禁赛区。', 'bad');
+        unlock('brute');
+        toast('连续三次双数，裁判怀疑你在用随机化暴力，把你请进了禁赛区。', 'bad');
         st.phase = 'action';
         updateTopbar();
         updateBoard();
@@ -998,8 +1071,19 @@
           }
         } else if (landing.action === 'mortgaged') {
           Game.log(`【${landing.tile.name}】已被 ${landing.owner.name} 抵押，本次免租。`, 'info');
+        } else if (landing.canUpgrade) {
+          if (player.isHuman) {
+            pendingUpgrade = landing.tile.id;
+            st.phase = 'action';
+            Game.log(`停在自己的【${landing.tile.name}】上，可以升级 Lv.${landing.level + 1} 算法建筑（${util.fmt(landing.cost)} token）。`, 'info');
+            toast(`走到自家【${landing.tile.name}】，可以升级建筑。`, 'info');
+          } else {
+            Game.log(`${player.name} 停在自己的【${landing.tile.name}】上，检查了一下 Lv.${landing.level} 建筑。`, 'info');
+          }
+        } else if (landing.atMax) {
+          Game.log(`【${landing.tile.name}】已经盖满 4 层，满配收租。`, 'info');
         } else {
-          Game.log(`${player.name} 停在自己的【${landing.tile.name}】上。`, 'info');
+          Game.log(`${player.name} 停在自己的【${landing.tile.name}】上，token 不足以继续加盖。`, 'info');
         }
         break;
       }
@@ -1031,9 +1115,10 @@
       }
       case 'jail': {
         if (landing.goto) {
-          Game.sendToJail(player, '踩到进入禁赛格');
+          Game.sendToJail(player, '被裁判查到写暴力（三重循环）');
           sound.play('jail');
-          toast(`${player.isHuman ? '你' : player.name} 被送进禁赛区。`, 'bad');
+          if (player.isHuman) unlock('brute');
+          toast(`${player.isHuman ? '你' : player.name} 写暴力被裁判抓包，送进禁赛区。`, 'bad');
           st.phase = 'action';
         } else {
           Game.log(`${player.name} 来禁赛区探监，顺便看望了一下老队友。`, 'info');
@@ -1089,6 +1174,40 @@
     refresh();
   }
 
+  function humanUpgrade() {
+    if (busy || pendingUpgrade == null || !Game.state || Game.state.over) return;
+    const tile = D.BOARD[pendingUpgrade];
+    const p = Game.current();
+    if (!p || !p.isHuman) return;
+    const algo = Game.build(p, tile.id);
+    if (!algo) {
+      toast('token 不足，先攒点钱再来加盖。', 'bad');
+      pendingUpgrade = null;
+      refresh();
+      return;
+    }
+    sound.play('build');
+    const level = Game.state.props[tile.id].algos.length;
+    toast(`【${tile.name}】升到 Lv.${level}【${algo.name}】，现在收租 ${util.fmt(Game.rentFor(tile.id, 7))} token。`, 'good');
+    highlightBuild(tile.id);
+    checkAchievements();
+    refresh();
+    updateCenter(tile.id, true);
+    if (!Game.canBuild(p, tile.id)) {
+      pendingUpgrade = null;
+      if (level >= D.CONFIG.maxAlgos) toast(`【${tile.name}】已经盖满 4 层，满配！`, 'achievement');
+      refresh();
+    }
+  }
+
+  function humanSkipUpgrade() {
+    if (busy || pendingUpgrade == null) return;
+    const tile = D.BOARD[pendingUpgrade];
+    Game.log(`你没有继续升级【${tile.name}】。`, 'info');
+    pendingUpgrade = null;
+    refresh();
+  }
+
   async function humanJailRoll() {
     const st = Game.state;
     if (!st || st.over || busy) return;
@@ -1106,7 +1225,7 @@
         await animateMove(p, res.roll.total);
         await resolveLanding(p);
       } else if (res.forced) {
-        toast('三次申诉失败，强制缴纳保释金后离开。', 'warn');
+        toast('三次申诉失败，强制缴纳罚金后离开。', 'warn');
         st.phase = 'action';
         if (res.bankrupt) scheduleEnd('bankrupt');
       } else {
@@ -1130,7 +1249,7 @@
     const res = Game.payJailFine(p);
     if (res) {
       sound.play('buy');
-      toast(`缴纳 ${util.fmt(res.paid)} token 保释金，恢复比赛资格。`, 'warn');
+      toast(`缴纳 ${util.fmt(res.paid)} token 罚金，恢复比赛资格。`, 'warn');
       st.phase = 'roll';
       refresh();
       updateCenter(p.pos, true);
@@ -1153,6 +1272,7 @@
   function humanEndTurn() {
     if (busy || !Game.state || Game.state.over) return;
     pendingBuy = null;
+    pendingUpgrade = null;
     finishTurn(true);
   }
 
@@ -1164,6 +1284,7 @@
     }
     busy = false;
     pendingBuy = null;
+    pendingUpgrade = null;
     const res = Game.endTurn(force);
 
     if (res.finished) { showEnd(res.reason); return; }
@@ -1243,7 +1364,7 @@
     }
     if (choice === 'pay' && p.tokens >= D.CONFIG.jailFine) {
       Game.payJailFine(p);
-      toast(`${p.name} 缴纳保释金，恢复了比赛资格。`, 'info');
+      toast(`${p.name} 缴纳罚金，恢复了比赛资格。`, 'info');
       refresh();
       await util.sleep(520);
       await aiMoveTurn(p);
@@ -1259,7 +1380,7 @@
       await animateMove(p, res.roll.total);
       await resolveLanding(p);
     } else if (res.forced) {
-      toast(`${p.name} 三次申诉失败，被强制保释。`, 'info');
+      toast(`${p.name} 三次申诉失败，被强制缴纳罚金。`, 'info');
       refresh();
     } else {
       refresh();
@@ -1274,9 +1395,9 @@
     await animateDice(roll.a, roll.b);
 
     if (st.doubles >= 3) {
-      Game.sendToJail(p, '连续三次双数');
+      Game.sendToJail(p, '连续三次双数，被判定为随机化暴力');
       sound.play('jail');
-      toast(`${p.name} 连续三次双数，被送进禁赛区。`, 'info');
+      toast(`${p.name} 连续三次双数，被判定为随机化暴力，送进禁赛区。`, 'info');
       refresh();
       return;
     }
@@ -1292,7 +1413,8 @@
     const algo = Game.build(p, target.id);
     if (algo) {
       sound.play('build');
-      toast(`${p.name} 在【${target.name}】安装了算法【${algo.name}】。`, 'info');
+      const level = Game.state.props[target.id].algos.length;
+      toast(`${p.name} 把【${target.name}】升到了 Lv.${level}【${algo.name}】。`, 'info');
       refresh();
     }
   }
@@ -1320,7 +1442,30 @@
     if (result.market) {
       announceNews(`市场行情：${result.market.groupName} 租金 ×${result.market.mult.toFixed(2)}`);
     }
-    if (result.jailed) sound.play('jail');
+    if (result.jailed) {
+      sound.play('jail');
+      if (player.isHuman) unlock('brute');
+    }
+    if (result.machineCrash) {
+      crashBoard();
+      sound.play('jail');
+      if (player.isHuman) unlock('machine_crash');
+      const lost = result.machineCrash.filter((r) => r.tile).length;
+      toast(`🔌 机房惨案！全场 ${lost} 层算法建筑短路损坏。`, 'bad');
+    }
+    if (result.destroyed) {
+      if (player.isHuman) unlock('machine_crash');
+      if (result.destroyed.tile) {
+        flashDisaster(result.destroyed.tile.id);
+        toast(`【${result.destroyed.tile.name}】的 Lv.${result.destroyed.level} 建筑被泡坏了。`, 'bad');
+      } else if (result.destroyed.paid > 0) {
+        toast(`没有建筑可损坏，赔偿 ${util.fmt(result.destroyed.paid)} token。`, 'bad');
+      }
+    }
+    if (card.effect.type === 'gainPerBuild' && result.amount > 0) {
+      toast(`按建筑层数结算，收入 ${util.fmt(result.amount)} token。`, 'good');
+      sound.play('good');
+    }
     if (Game.state.over) { showEnd(Game.state.endReason); return; }
 
     if (result.moveTo != null) {
@@ -1381,6 +1526,12 @@
       const completes = Game.groupProgress(p.id, tile.group) >= 1;
       if (p.tokens >= tile.price && (completes || p.tokens - tile.price > 3500)) humanBuy();
       else humanSkipBuy();
+      return;
+    }
+    if (pendingUpgrade != null) {
+      const cost = Game.upgradeCost(pendingUpgrade);
+      if (p.tokens >= cost && p.tokens - cost > 2500) humanUpgrade();
+      else humanSkipUpgrade();
       return;
     }
     const buildables = Game.ownedTiles(p.id).filter((t) => Game.canBuild(p, t.id));
@@ -1525,10 +1676,13 @@
       case 'pay': return `-${util.fmt(e.amount)} token`;
       case 'payRival': return `向随机对手支付 ${util.fmt(e.amount)} token`;
       case 'collectEach': return `其他选手各支付 ${util.fmt(e.amount)} token 给你`;
-      case 'jail': return '直接进入禁赛区';
+      case 'jail': return `直接进入禁赛区（${e.reason || '写暴力被查重'}）`;
       case 'getOut': return '获得「申诉信」× 1';
       case 'diceGain': return `掷 2d6，点数 × ${e.mult} token`;
-      case 'freeBuild': return '随机自有地块免费安装 1 个算法';
+      case 'freeBuild': return '随机自有地块免费加盖 1 层算法建筑';
+      case 'destroyBuild': return `随机 1 栋算法建筑降 1 级；无建筑则赔偿 ${util.fmt(e.fallback || 0)} token`;
+      case 'machineCrash': return `所有选手随机损坏 1 层建筑；无建筑者赔偿 ${util.fmt(e.amount || 600)} token`;
+      case 'gainPerBuild': return `按建筑层数 × ${util.fmt(e.amount)} token 结算`;
       case 'market': return `随机章节租金 ×${e.mult}，持续 ${e.rounds} 回合`;
       case 'moveTo': return '移动到 AK 起点，并领取 3,000 token';
       case 'moveBy': return `前进 ${e.steps} 格`;
@@ -1561,14 +1715,15 @@
         <div class="modal__icon">📖</div>
         <div><p class="kicker">HOW TO PLAY</p><h3>机房生存手册</h3></div>
       </div>
-      <div class="rule-section"><h4><span>01</span>目标</h4><p>在限定回合内成为总资产最高的选手。买下算法地块、安装算法、收取租金；让其他人全部破产也能提前结束比赛。</p></div>
-      <div class="rule-section"><h4><span>02</span>回合</h4><p>掷两颗骰子沿棋盘前进，停在格子上结算。掷出双数可以再掷一次；连续三次双数会被直接送进禁赛区。</p></div>
-      <div class="rule-section"><h4><span>03</span>算法地产</h4><p>停在无主地块时可以买下。集齐同一章节的三块地后，基础租金翻倍，并解锁“安装算法”。每次安装都会给地块加一个具体算法，最多 4 个，租金逐级上涨。</p></div>
-      <div class="rule-section"><h4><span>04</span>token 与破产</h4><p>token 既是现金也是分数。付不起租金时会自动变卖算法、抵押地块；仍然不够就破产退役，名下地块回到题库。抵押中的地块不收租，赎回需要 55% 的原价。</p></div>
-      <div class="rule-section"><h4><span>05</span>禁赛区</h4><p>停在“进入禁赛”或被事件卡命中会进入禁赛。每回合可以：使用申诉信、缴纳 4,000 token 保释金，或掷骰子求双数。三次申诉失败会被强制保释。</p></div>
-      <div class="rule-section"><h4><span>06</span>随机事件与行情</h4><p>“随机事件”和“OJ 公告”会改变 token、位置、禁赛状态与租金。每 4 回合还会出现一次市场行情，某个章节的租金会在一段时间内上涨或下跌。</p></div>
-      <div class="rule-section"><h4><span>07</span>罚时池</h4><p>罚时费和保释金会进入 AK 休息室的池子。停在休息室的人可以拿走全部 token。</p></div>
-      <div class="rule-section"><h4><span>08</span>操作</h4><p>空格掷骰子；点击任意地块查看租金、算法与抵押状态；在自己的回合点击“安装算法”可以批量升级。</p></div>
+      <div class="rule-section"><h4><span>01</span>目标</h4><p>token 就是钱：买地、建楼、交租、缴纳罚金都用它。在限定回合内成为总资产最高的选手；让其他人全部破产也能提前结束比赛。</p></div>
+      <div class="rule-section"><h4><span>02</span>回合</h4><p>掷两颗骰子沿棋盘前进，停在格子上结算。掷出双数可以再掷一次；连续三次双数会被判定为“随机化暴力”，直接送进禁赛区。</p></div>
+      <div class="rule-section"><h4><span>03</span>算法建筑</h4><p>停在无主地块时可以买下。任何自有地块都能建造算法建筑，每块地最多 4 层，每一层都是一个具体算法。层数越高租金越高；集齐同一章节的三块地，基础租金再 ×2。</p></div>
+      <div class="rule-section"><h4><span>04</span>走到自家建筑 · 升级</h4><p>停在自家算法建筑上，可以直接加盖一层。升级费用随层数递增，拆除顶层只返还 50% 的造价。在自己回合也可以点击“建造 / 升级算法建筑”批量操作。</p></div>
+      <div class="rule-section"><h4><span>05</span>禁赛区</h4><p>写暴力（brute force）会被裁判查重并禁赛：踩到“暴力检查”、抽到暴力事件，或连续三次双数都会进去。每回合可以：使用申诉信、缴纳 4,000 token 罚金，或掷骰子求双数。三次申诉失败会被强制缴纳罚金。</p></div>
+      <div class="rule-section"><h4><span>06</span>随机事件 · 机惨</h4><p>随机事件里包括“机惨”（机房惨案）：断电、空调漏水、硬盘损坏会让算法建筑随机降 1 层；没有建筑就赔钱。也有 UPS、机惨保险理赔等回血事件。每 4 回合还会出现一次市场行情，某个章节的租金会上涨或下跌。</p></div>
+      <div class="rule-section"><h4><span>07</span>破产</h4><p>付不起租金或赔偿时，系统会自动拆除算法建筑、抵押地块来筹钱；仍然不够就破产退役，名下地块回到题库。抵押中的地块不收租，赎回需要 55% 的原价。</p></div>
+      <div class="rule-section"><h4><span>08</span>罚时池</h4><p>罚时费和罚金会进入 AK 休息室的池子。停在休息室的人可以拿走全部 token。</p></div>
+      <div class="rule-section"><h4><span>09</span>操作</h4><p>空格掷骰子；点击任意地块查看建筑层数、租金与抵押状态；在自己的回合点击“建造 / 升级算法建筑”可以批量加盖。</p></div>
       <p class="setup-foot" style="margin-top:16px">所有数字与概率都只是游戏设定，不涉及任何真实支付。</p>`;
     openModal({
       wide: true,
@@ -1640,21 +1795,24 @@
     }
 
     if (isProperty) {
-      const levels = ['无算法', '1 个算法', '2 个算法', '3 个算法', '4 个算法'];
+      const labels = ['空地 Lv.0', 'Lv.1', 'Lv.2', 'Lv.3', 'Lv.4'];
       const rents = Game.rentTable(tileId);
       const level = prop.algos.length;
-      const rows = levels.map((label, i) => `<tr class="${i === level ? 'is-current' : ''}"><td>${label}</td><td>${util.fmt(rents[i])} token</td></tr>`).join('');
+      const rows = labels.map((label, i) => `<tr class="${i === level ? 'is-current' : ''}"><td>${label}</td><td>${util.fmt(rents[i])} token</td></tr>`).join('');
       const mult = Game.marketMult(tile.group);
       const bonus = owner && Game.ownsGroup(owner.id, tile.group);
+      const invested = Game.investedIn(tileId);
+      const nextCost = level < D.CONFIG.maxAlgos ? Game.upgradeCost(tileId) : 0;
       html += `<div class="subhead"><span>RENT TABLE</span><strong>${bonus ? '章节垄断 · 租金 ×2' : '未集齐章节'}${mult !== 1 ? ` · 行情 ×${mult.toFixed(2)}` : ''}</strong></div>
         <table class="rent-table">${rows}</table>
-        <div class="subhead"><span>ALGORITHMS</span><strong>${level} / 4</strong></div>
+        <div class="subhead"><span>ALGORITHM BUILDINGS</span><strong>${level} / 4 层${invested ? ` · 已投入 ${util.fmt(invested)}` : ''}</strong></div>
         <div class="algo-slots">${tile.algoSet.map((a, i) => {
           const filled = i < level;
-          return `<div class="algo-slot${filled ? ' is-filled' : ''}">${filled ? util.escapeHtml(a.name) : '空位'}<small>${filled ? 'RUNNING' : `+${util.fmt(tile.buildCost)}`}</small></div>`;
+          const cost = Game.costAtLevel(tileId, i + 1);
+          return `<div class="algo-slot${filled ? ' is-filled' : ''}">${filled ? util.escapeHtml(a.name) : `Lv.${i + 1} 空地`}<small>${filled ? `Lv.${i + 1} · RUNNING` : `+${util.fmt(cost)}`}</small></div>`;
         }).join('')}</div>`;
       const progress = owner ? Game.groupProgress(owner.id, tile.group) : 0;
-      html += `<p class="tile-detail__note">${D.GROUPS[tile.group].name}：${owner ? `${owner.name} 已持有 ${progress}/3 块` : '尚无持有者'}。安装算法需要集齐整个章节，单次 ${util.fmt(tile.buildCost)} token。</p>`;
+      html += `<p class="tile-detail__note">${D.GROUPS[tile.group].name}：${owner ? `${owner.name} 已持有 ${progress}/3 块` : '尚无持有者'}。走到自家建筑上可直接升级；集齐整章后租金 ×2。${level < 4 ? `下一层需要 ${util.fmt(nextCost)} token。` : '已经盖满 4 层。'}</p>`;
     } else if (isFacility) {
       const count = owner ? Game.facilitiesOwned(owner.id) : 0;
       html += `<div class="subhead"><span>RENT FORMULA</span><strong>${D.CONFIG.facilityRentBase} × 骰子点数 × 设施数</strong></div>
@@ -1663,7 +1821,7 @@
           <tr><td>两颗骰子平均租金</td><td>${util.fmt(D.CONFIG.facilityRentBase * count * 7)} token</td></tr>
           <tr><td>抵押价值</td><td>${util.fmt(Math.round(tile.price * 0.5))} token</td></tr>
         </table>
-        <p class="tile-detail__note">算力设施没有算法槽。四座设施全部拿下，过路费会非常可观。</p>`;
+        <p class="tile-detail__note">算力设施没有建筑位。四座设施全部拿下，过路费会非常可观。</p>`;
     }
 
     const actions = [];
@@ -1678,29 +1836,32 @@
       actions.push({ label: '暂不购买', value: null, className: 'btn--ghost' });
     } else if (canManage && (isProperty || isFacility)) {
       if (isProperty) {
-        if (Game.canBuild(human, tile.id)) {
-          actions.push({ label: `安装算法 · ${util.fmt(tile.buildCost)}`, value: 'build', className: 'btn--primary' });
-        } else if (prop.mortgaged) {
+        const level = prop.algos.length;
+        const nextCost = Game.upgradeCost(tileId);
+        if (prop.mortgaged) {
           actions.push({ label: `赎回 · ${util.fmt(Game.redeemCost(tile))}`, value: 'redeem', className: 'btn--gold', disabled: human.tokens < Game.redeemCost(tile) });
-        } else if (prop.algos.length > 0) {
-          actions.push({ label: `卖出算法 · +${util.fmt(Math.round(tile.buildCost * 0.5))}`, value: 'sell', className: 'btn--ghost' });
-        } else if (!Game.ownsGroup(human.id, tile.group)) {
-          actions.push({ label: '安装算法（需集齐章节）', value: null, className: 'btn--ghost', disabled: true });
-        } else if (human.tokens < tile.buildCost) {
-          actions.push({ label: `安装算法 · ${util.fmt(tile.buildCost)}`, value: null, className: 'btn--ghost', disabled: true });
+        } else {
+          if (level < D.CONFIG.maxAlgos) {
+            const afford = human.tokens >= nextCost;
+            actions.push({
+              label: `${level === 0 ? '建造' : '升级'} Lv.${level + 1} · ${util.fmt(nextCost)}`,
+              value: afford ? 'build' : null,
+              className: afford ? 'btn--primary' : 'btn--ghost',
+              disabled: !afford
+            });
+          }
+          if (level > 0) {
+            const refund = Math.round(Game.costAtLevel(tileId, level) * D.CONFIG.sellRatio);
+            actions.push({ label: `拆除顶层 · +${util.fmt(refund)}`, value: 'sell', className: 'btn--ghost' });
+          }
+          if (level === 0) {
+            actions.push({ label: `抵押 · +${util.fmt(Math.round(tile.price * D.CONFIG.mortgageRatio))}`, value: 'mortgage', className: 'btn--ghost' });
+          }
         }
-      }
-      if (isProperty && prop.mortgaged) {
-        /* 赎回按钮已在上方处理 */
       } else if (!prop.mortgaged) {
-        const mortgageAmount = Math.round(tile.price * 0.5);
-        const canMortgage = isFacility || prop.algos.length === 0;
-        actions.push({
-          label: `抵押 · +${util.fmt(mortgageAmount)}`,
-          value: 'mortgage',
-          className: 'btn--ghost',
-          disabled: !canMortgage
-        });
+        actions.push({ label: `抵押 · +${util.fmt(Math.round(tile.price * D.CONFIG.mortgageRatio))}`, value: 'mortgage', className: 'btn--ghost' });
+      } else {
+        actions.push({ label: `赎回 · ${util.fmt(Game.redeemCost(tile))}`, value: 'redeem', className: 'btn--gold', disabled: human.tokens < Game.redeemCost(tile) });
       }
       actions.push({ label: '关闭', value: null, className: 'btn--ghost' });
     } else {
@@ -1732,14 +1893,19 @@
           changed = true;
         }
       } else if (value === 'build') {
-        if (Game.build(p, tile.id)) {
+        const algo = Game.build(p, tile.id);
+        if (algo) {
+          const level = Game.state.props[tile.id].algos.length;
           sound.play('build');
-          toast(`算法已安装到【${tile.name}】。`, 'good');
+          toast(`【${tile.name}】升到 Lv.${level}【${algo.name}】，租金上涨。`, 'good');
+          highlightBuild(tile.id);
           changed = true;
         }
       } else if (value === 'sell') {
-        if (Game.sellAlgo(p, tile.id)) {
+        const refund = Game.sellAlgo(p, tile.id);
+        if (refund) {
           sound.play('sell');
+          toast(`拆除【${tile.name}】顶层，回收 ${util.fmt(refund)} token。`, 'warn');
           changed = true;
         }
       } else if (value === 'mortgage') {
@@ -1769,21 +1935,28 @@
     const human = Game.state.players[0];
     const current = Game.current();
     if (!current || !current.isHuman) return;
-    const candidates = Game.ownedTiles(human.id).filter((t) => Game.canBuild(human, t.id));
+    const candidates = Game.ownedTiles(human.id).filter((t) => {
+      const prop = Game.state.props[t.id];
+      return t.type === 'property' && !prop.mortgaged && prop.algos.length < D.CONFIG.maxAlgos;
+    });
     if (!candidates.length) {
-      toast('还没有可以安装算法的地块。先集齐一个章节的三块地。', 'warn');
+      toast('没有可以加盖的地块。先买一块地，或者把已有建筑拆到 4 层以下。', 'warn');
       return;
     }
     const rows = candidates.map((t) => {
       const prop = Game.state.props[t.id];
-      const nextRent = Game.rentTable(t.id)[Math.min(4, prop.algos.length + 1)];
+      const level = prop.algos.length;
+      const cost = Game.upgradeCost(t.id);
+      const afford = human.tokens >= cost;
+      const nextAlgo = t.algoSet[level];
+      const nextRent = Game.rentTable(t.id)[Math.min(4, level + 1)];
       return `<div class="build-row">
         <span class="build-row__swatch" style="--c:${D.GROUPS[t.group].color}"></span>
         <div class="build-row__main">
-          <strong>${util.escapeHtml(t.name)}</strong>
-          <small>${prop.algos.length}/4 个算法 · 安装后租金约 ${util.fmt(nextRent)}</small>
+          <strong>${util.escapeHtml(t.name)} <span class="build-row__level">Lv.${level} → Lv.${level + 1}</span></strong>
+          <small>${nextAlgo ? util.escapeHtml(nextAlgo.name) : '算法建筑'} · 升级后租金约 ${util.fmt(nextRent)}</small>
         </div>
-        <button class="btn btn--primary" type="button" data-value="build:${t.id}" ${human.tokens < t.buildCost ? 'disabled' : ''}>${util.fmt(t.buildCost)}</button>
+        <button class="btn btn--primary" type="button" data-value="build:${t.id}" ${afford ? '' : 'disabled'}>${util.fmt(cost)}</button>
       </div>`;
     }).join('');
 
@@ -1791,13 +1964,13 @@
       wide: true,
       html: `
         <div class="modal__head">
-          <div class="modal__icon">🧱</div>
-          <div><p class="kicker">INSTALL ALGORITHMS</p><h3>安装算法</h3></div>
+          <div class="modal__icon">🏗</div>
+          <div><p class="kicker">BUILD / UPGRADE</p><h3>建造 / 升级算法建筑</h3></div>
         </div>
-        <p>每次安装会把一个新的算法写进地块，最多 4 个。安装需要集齐整个章节。当前 token：<strong style="color:var(--gold);font-family:var(--mono)">${util.fmt(human.tokens)}</strong></p>
+        <p>每块地最多盖 4 层，每层都是一个算法建筑。走到自家建筑上可以直接升级，不要求集齐章节。当前现金：<strong style="color:var(--gold);font-family:var(--mono)">${util.fmt(human.tokens)}</strong> token</p>
         <div class="build-list">${rows}</div>`,
       actions: [
-        { label: '全部安装', value: 'all', className: 'btn--ghost' },
+        { label: '一键升级', value: 'all', className: 'btn--ghost' },
         { label: '关闭', value: null, className: 'btn--ghost' }
       ]
     }).then((value) => {
@@ -1807,6 +1980,8 @@
         for (let i = 0; i < 20; i++) {
           const list = Game.ownedTiles(human.id).filter((t) => Game.canBuild(human, t.id));
           if (!list.length) break;
+          list.sort((a, b) => Game.rentTable(b.id)[Math.min(4, Game.state.props[b.id].algos.length + 1)]
+            - Game.rentTable(a.id)[Math.min(4, Game.state.props[a.id].algos.length + 1)]);
           if (Game.build(human, list[0].id)) built += 1;
           else break;
         }
@@ -1816,7 +1991,7 @@
       }
       if (built) {
         sound.play('build');
-        toast(`安装了 ${built} 个算法，租金已经上涨。`, 'good');
+        toast(`加盖了 ${built} 层算法建筑，租金已经上涨。`, 'good');
         checkAchievements();
         refresh();
         updateCenter(Game.current().pos, true);
@@ -1868,10 +2043,10 @@
     let sub;
     if (humanWin) {
       title = 'AK 全场';
-      sub = '你把整间机房写进了自己的资产表。今晚的题解，署你的名字。';
+      sub = '你的算法建筑从机房一路盖到评测机顶端。今晚的题解，署你的名字。';
     } else if (!human.alive) {
       title = '光荣退役';
-      sub = 'token 归零，地块回到题库。但你留下的题解，还会被下一届抄很多年。';
+      sub = 'token 归零，算法建筑被拆除，地块回到题库。但你留下的题解，还会被下一届抄很多年。';
     } else {
       title = `第 ${rank} 名`;
       sub = `${winner.name} 以 ${util.fmt(Game.netWorth(winner))} 总资产拿下第一。再开一局，把 TA 的地买下来。`;
@@ -1895,11 +2070,13 @@
     }).join('');
 
     const owned = Game.ownedTiles(human.id);
-    const algos = owned.reduce((n, t) => n + st.props[t.id].algos.length, 0);
+    const algos = Game.buildingCount(human.id);
+    const maxLevel = owned.reduce((n, t) => Math.max(n, st.props[t.id].algos.length), 0);
     dom.endStats.innerHTML = `
       <div class="end-stat"><span>赛程</span><strong>${played}/${st.maxRounds}</strong></div>
       <div class="end-stat"><span>你的总资产</span><strong>${util.fmt(net)}</strong></div>
-      <div class="end-stat"><span>地块 / 算法</span><strong>${owned.length} / ${algos}</strong></div>
+      <div class="end-stat"><span>地块 / 建筑</span><strong>${owned.length} / ${algos}</strong></div>
+      <div class="end-stat"><span>最高建筑</span><strong>Lv.${maxLevel}</strong></div>
       <div class="end-stat"><span>抽到事件</span><strong>${human.stats.cards}</strong></div>`;
 
     dom.endScreen.hidden = false;
@@ -1939,7 +2116,10 @@
 
   /* 对外暴露，方便调试与自动化测试 */
   window.OI_UI = {
-    startGame, backToLobby, refresh, humanRoll, openTile, get busy() { return busy; }
+    startGame, backToLobby, refresh, humanRoll, humanUpgrade, humanSkipUpgrade, openTile, openBuildMenu, showCardModal,
+    get busy() { return busy; },
+    get pendingBuy() { return pendingBuy; },
+    get pendingUpgrade() { return pendingUpgrade; }
   };
 
   init();
