@@ -7,6 +7,7 @@
 
   const D = OI.DATA;
   const Game = OI.Game;
+  const net = OI.Net;
   const util = OI.util;
   const sound = OI.sound;
   const storage = OI.storage;
@@ -16,14 +17,16 @@
 
   /* DOM */
   const dom = {};
-  let selected = { diff: 'normal', count: 3, rounds: 25 };
+  let selected = { diff: 'normal', count: 3, rounds: 25, size: 40 };
   let busy = false;
+  let awaiting = false;
   let pendingBuy = null;
   let pendingUpgrade = null;
   let aiTimer = null;
   let modalClose = null;
   let endShown = false;
   let endingTimer = null;
+  let remoteTurnTimer = null;
   let tileEls = {};
   let tileRefs = {};
   let pawnEls = {};
@@ -31,6 +34,14 @@
   let autoPlayed = false;
   let autoMode = false;
   let autoTimer = null;
+  let lanLobbyOpen = false;
+  let lastRoomView = null;
+  let guestInit = false;
+  let awaitingSince = 0;
+  let awaitingTurn = -1;
+  let lobbyConfig = null;
+  const netDebug = { start: 0, snapshot: 0, skip: '', error: '' };
+  window.__OI_NET_DEBUG = netDebug;
 
   /* ============================================================
      初始化
@@ -42,10 +53,10 @@
       'tickerText', 'tickerRound', 'turnCard', 'turnState', 'actionButtons', 'actionHint',
       'playerList', 'rosterNote', 'gameLog', 'logToggle', 'topbarTokens', 'soundBtn',
       'achieveBtn', 'helpBtn', 'startBtn', 'bestRecordValue', 'setupSummary', 'modeNote',
-      'diffChoices', 'countChoices', 'roundChoices', 'modalRoot', 'toastRoot',
+      'diffChoices', 'countChoices', 'roundChoices', 'sizeChoices', 'sizeNote', 'modalRoot', 'toastRoot',
       'endScreen', 'endTitle', 'endSub', 'endRanking', 'endStats', 'againBtn', 'lobbyBtn',
-      'brandHome', 'tickerText', 'centerRound', 'centerPot', 'centerChapters', 'centerMeta',
-      'sideMarket', 'marketNote', 'debugBox'
+      'brandHome', 'tickerText', 'centerRound', 'centerPot', 'centerChapters', 'centerMeta', 'centerEra',
+      'sideMarket', 'marketNote', 'synergyList', 'synergyNote', 'lanBtn', 'lanChip', 'debugBox'
     ].forEach((id) => { dom[id] = document.getElementById(id); });
 
     initDie(dom.dieA);
@@ -72,8 +83,16 @@
         updateSetupUI();
       });
     });
+    $$('#sizeChoices .segment').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        selected.size = Number(btn.dataset.size);
+        sound.play('click');
+        updateSetupUI();
+      });
+    });
 
     dom.startBtn.addEventListener('click', () => { sound.unlock(); sound.play('deal'); startGame(); });
+    dom.lanBtn.addEventListener('click', () => { sound.unlock(); sound.play('click'); openLanEntry(); });
     dom.helpBtn.addEventListener('click', openRules);
     dom.achieveBtn.addEventListener('click', openAchievements);
     dom.soundBtn.addEventListener('click', () => {
@@ -102,12 +121,31 @@
     dom.againBtn.addEventListener('click', () => {
       dom.endScreen.hidden = true;
       endShown = false;
-      startGame();
+      if (net.isLan()) {
+        backToLobby();
+      } else {
+        startGame();
+      }
     });
     dom.lobbyBtn.addEventListener('click', backToLobby);
 
     document.addEventListener('keydown', onKeydown);
     window.addEventListener('resize', debounce(layoutPawns, 120));
+
+    net.onRoom = onNetRoom;
+    net.onStart = onNetStart;
+    net.onAction = onNetAction;
+    net.onSnapshot = onNetSnapshot;
+    net.onError = (msg) => toast(msg, 'bad');
+    net.onClose = (reason) => {
+      if (reason) toast(reason, 'bad');
+      if (net.mode !== 'local') {
+        net.reset();
+        backToLobby();
+      }
+    };
+    dom.modalRoot.addEventListener('click', onLanModalClick);
+    dom.modalRoot.addEventListener('change', onLanConfigChange);
 
     syncSoundButton();
     updateSetupUI();
@@ -134,6 +172,7 @@
       if (params.get('difficulty') && D.DIFFICULTIES[params.get('difficulty')]) selected.diff = params.get('difficulty');
       if (params.get('rounds')) selected.rounds = Number(params.get('rounds'));
       if (params.get('count')) selected.count = util.clamp(Number(params.get('count')), 2, 4);
+      if (params.get('size') && D.SIZE_PRESETS[params.get('size')]) selected.size = Number(params.get('size'));
       startGame();
       if (params.get('autoroll')) {
         setTimeout(() => {
@@ -164,9 +203,13 @@
     $$('#diffChoices .choice').forEach((b) => b.classList.toggle('is-active', b.dataset.diff === selected.diff));
     $$('#countChoices .segment').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.count) === selected.count));
     $$('#roundChoices .segment').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.rounds) === selected.rounds));
+    $$('#sizeChoices .segment').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.size) === selected.size));
     const diff = D.DIFFICULTIES[selected.diff];
-    dom.modeNote.textContent = `${diff.name} · 起始 ${util.fmt(diff.start)}`;
-    dom.setupSummary.innerHTML = `<span class="pulse-dot"></span><span>${diff.name} · ${selected.rounds} 回合 · ${selected.count} 名选手 · 每人 ${util.fmt(diff.start)} token</span>`;
+    const preset = D.SIZE_PRESETS[selected.size] || D.SIZE_PRESETS[40];
+    const start = util.roundTo(diff.start * preset.startMult, 500);
+    dom.modeNote.textContent = `${diff.name} · 起始 ${util.fmt(start)}`;
+    if (dom.sizeNote) dom.sizeNote.textContent = `${preset.name} · 初始工资 ${util.fmt(preset.salary)}`;
+    dom.setupSummary.innerHTML = `<span class="pulse-dot"></span><span>${diff.name} · ${preset.name} · ${selected.rounds} 回合 · ${selected.count} 名选手 · 每人 ${util.fmt(start)} token · 三轮时局</span>`;
   }
 
   function updateBestRecord() {
@@ -177,12 +220,15 @@
   /* ============================================================
      开局 / 回大厅
      ============================================================ */
-  function startGame() {
+  function resetGameUI() {
     clearTimeout(aiTimer);
     clearTimeout(endingTimer);
+    clearTimeout(remoteTurnTimer);
+    remoteTurnTimer = null;
     stopAutopilot();
     endShown = false;
     busy = false;
+    awaiting = false;
     pendingBuy = null;
     pendingUpgrade = null;
     logCursor = 0;
@@ -191,42 +237,65 @@
     dom.gameLog.classList.remove('is-expanded');
     dom.logToggle.textContent = '展开';
     dom.endScreen.hidden = true;
+  }
 
-    Game.create({ difficulty: selected.diff, count: selected.count, rounds: selected.rounds });
+  function startGame() {
+    resetGameUI();
+    if (net.isLan()) { net.leave(true); net.reset(); }
+    Game.create({
+      difficulty: selected.diff, count: selected.count, rounds: selected.rounds,
+      boardSize: selected.size
+    });
+    enterGame();
+    beginTurn();
+  }
 
+  function enterGame() {
     dom.setupScreen.hidden = true;
     dom.gameScreen.hidden = false;
+    if (dom.lanChip) {
+      dom.lanChip.hidden = !net.isLan();
+      dom.lanChip.textContent = net.isLan() ? `📶 联机 ${net.room}` : '📶 联机';
+    }
     window.scrollTo({ top: 0, behavior: 'auto' });
-
     buildBoard();
     buildPawns();
     refresh();
     requestAnimationFrame(layoutPawns);
     updateTicker();
-    updateCenter(0, false);
-    beginTurn();
+    if (Game.state) updateCenter(Game.current() ? Game.current().pos : 0, false);
   }
 
   function backToLobby() {
     clearTimeout(aiTimer);
     clearTimeout(endingTimer);
+    clearTimeout(remoteTurnTimer);
+    remoteTurnTimer = null;
     stopAutopilot();
+    if (net.isLan()) { net.leave(true); net.reset(); }
     busy = false;
+    awaiting = false;
     pendingBuy = null;
     pendingUpgrade = null;
+    lanLobbyOpen = false;
+    guestInit = false;
     dom.endScreen.hidden = true;
     dom.gameScreen.hidden = true;
     dom.setupScreen.hidden = false;
+    if (dom.lanChip) dom.lanChip.hidden = true;
     updateBestRecord();
     updateSetupUI();
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
 
   function confirmLeave() {
+    const lan = net.isLan();
     openModal({
-      title: '离开这局比赛？',
+      title: lan ? '离开联机房间？' : '离开这局比赛？',
       icon: '🚪',
-      html: '<p>当前对局不会保存，离开后需要重新开始。</p>',
+      html: lan
+        ? '<p>离开后本局不会保存；如果你是房主，房间会直接关闭。</p>'
+        : '<p>当前对局不会保存，离开后需要重新开始。</p>',
       actions: [
         { label: '继续比赛', value: null, className: 'btn--ghost' },
         { label: '离开对局', value: 'leave', className: 'btn--danger' }
@@ -247,7 +316,17 @@
     tileEls = {};
     tileRefs = {};
 
-    D.BOARD.forEach((tile) => {
+    const board = Game.board || Game.board;
+    const size = board.length;
+    const side = size / 4;
+    dom.board.classList.toggle('board--dense', size > 40);
+    dom.board.classList.toggle('board--xl', size >= 96);
+    dom.board.style.gridTemplateColumns = `1.18fr repeat(${side - 1}, 1fr) 1.18fr`;
+    dom.board.style.gridTemplateRows = `1.18fr repeat(${side - 1}, 1fr) 1.18fr`;
+    const center = document.getElementById('boardCenter');
+    if (center) center.style.gridArea = `2 / 2 / ${side + 1} / ${side + 1}`;
+
+    board.forEach((tile) => {
       const el = document.createElement('button');
       el.type = 'button';
       el.className = `tile tile--${tile.side}`;
@@ -355,15 +434,16 @@
       const players = byPos[posKey];
       const pos = Number(posKey);
       const tile = tileEls[pos];
-      const tileData = D.BOARD[pos];
-      if (!tile) return;
+      const tileData = Game.board[pos];
+      if (!tile || !tileData) return;
       const r = tile.getBoundingClientRect();
       let ax = 0.5;
       let ay = 0.5;
       if (tileData.side === 'corner') {
-        if (pos === 0) { ax = 0.74; ay = 0.74; }
-        else if (pos === 10) { ax = 0.26; ay = 0.74; }
-        else if (pos === 20) { ax = 0.26; ay = 0.26; }
+        const corner = tileData.corner || 'br';
+        if (corner === 'br') { ax = 0.74; ay = 0.74; }
+        else if (corner === 'bl') { ax = 0.26; ay = 0.74; }
+        else if (corner === 'tl') { ax = 0.26; ay = 0.26; }
         else { ax = 0.74; ay = 0.26; }
       } else if (tileData.side === 'bottom') {
         ay = 0.76;
@@ -460,6 +540,55 @@
   }
 
   /* ============================================================
+     本地玩家 / 铭牌
+     ============================================================ */
+  function isGuest() {
+    return net.mode === 'guest';
+  }
+
+  function me() {
+    if (!Game.state) return null;
+    if (isGuest()) {
+      return Game.state.players.find((p) => p.slot === net.slot) || Game.state.players[0] || null;
+    }
+    return Game.state.players[0] || null;
+  }
+
+  function isLocalTurn() {
+    const p = Game.current();
+    if (!p || !Game.state || Game.state.over) return false;
+    if (isGuest()) return p.slot === net.slot;
+    return !p.remote;
+  }
+
+  function label(p) {
+    const local = me();
+    return local && p && local.id === p.id ? '你' : (p ? p.name : '选手');
+  }
+
+  function shouldEndLocal(p) {
+    if (!p || net.isLan()) return false;
+    const local = me();
+    return !!local && local.id === p.id;
+  }
+
+  function hasMaxedBuilding(p) {
+    if (!p) return false;
+    return Game.ownedTiles(p.id).some((t) => Game.state.props[t.id].algos.length >= D.CONFIG.maxAlgos);
+  }
+
+  function plateFor(p) {
+    if (!p) return D.NAMEPLATES[0];
+    return D.nameplateFor(Game.netWorth(p), hasMaxedBuilding(p));
+  }
+
+  function plateMarkup(p, compact) {
+    const plate = plateFor(p);
+    const cls = 'nameplate' + (plate.id === 'prism' ? ' nameplate--prism' : '') + (compact ? ' nameplate--sm' : '');
+    return `<span class="${cls}" style="--np:${plate.color};--np-bg:${plate.bg};--np-border:${plate.border}" title="洛谷难度铭牌：${plate.name}"><span class="nameplate__text">${plate.name}</span></span>`;
+  }
+
+  /* ============================================================
      渲染
      ============================================================ */
   function refresh() {
@@ -472,10 +601,21 @@
     updateCenterMeta();
     updateChapters();
     updateSideMarket();
+    updateSynergy();
     updateLog();
     renderActions();
     requestAnimationFrame(layoutPawns);
     setTimeout(layoutPawns, 80);
+    broadcastSnapshot();
+  }
+
+  function broadcastSnapshot() {
+    if (net.mode !== 'host' || !Game.state) return;
+    net.hostSnapshot({
+      state: Game.state,
+      ui: { pendingBuy, pendingUpgrade, busy },
+      slot: 0
+    });
   }
 
   function updateCenterMeta() {
@@ -483,6 +623,9 @@
     if (!st || !dom.centerRound) return;
     dom.centerRound.textContent = `ROUND ${String(Math.min(st.round, st.maxRounds)).padStart(2, '0')} / ${st.maxRounds}`;
     dom.centerPot.textContent = `罚时池 ${util.fmt(st.pot)}`;
+    if (dom.centerEra) {
+      dom.centerEra.textContent = `${st.eraName || '第一轮'} / 3 · 时局事件 ${st.eventCount || 0}`;
+    }
   }
 
   function updateChapters() {
@@ -500,26 +643,36 @@
   }
 
   function updateTopbar() {
-    const human = Game.state.players[0];
+    const human = me();
     dom.topbarTokens.textContent = util.fmt(human ? human.tokens : 0);
+    if (human && human.loanOwed) {
+      dom.topbarTokens.title = `银行贷款待还 ${util.fmt(human.loanOwed)} token`;
+    } else {
+      dom.topbarTokens.title = '';
+    }
   }
 
   function updateTurnCard() {
     const p = Game.current();
     if (!p) return;
-    const tile = D.BOARD[p.pos];
+    const tile = Game.board[p.pos];
     const owned = Game.ownedTiles(p.id);
     const buildingCount = Game.buildingCount(p.id);
     const isAI = !p.isHuman;
     const badge = p.inJail ? '<span class="turn-badge is-banned">暴力禁赛中</span>'
-      : isAI ? `<span class="turn-badge is-ai">${p.tag}</span>` : '<span class="turn-badge">正在行动</span>';
+      : isAI ? `<span class="turn-badge is-ai">${p.tag}</span>`
+        : (p.remote ? '<span class="turn-badge is-lan">联机中</span>' : '<span class="turn-badge">正在行动</span>');
+    const plate = plateMarkup(p);
+    const loanPill = p.loanOwed > 0
+      ? `<span class="stat-pill stat-pill--debt">银行欠款 <b>${util.fmt(p.loanOwed)}</b></span>`
+      : (p.loanTaken ? '<span class="stat-pill">贷款已用</span>' : '');
 
     dom.turnCard.style.setProperty('--pc', p.color);
     dom.turnCard.innerHTML = `
       <div class="turn-card__top">
         <span class="avatar">${p.icon}</span>
         <div class="turn-card__ident">
-          <div class="turn-card__name"><span class="dot"></span>${util.escapeHtml(p.name)}</div>
+          <div class="turn-card__name"><span class="dot"></span>${util.escapeHtml(p.name)}${plate}</div>
           <span class="turn-card__meta">${p.inJail ? 'BANNED · 暴力代码审查中' : `AT #${p.pos} · ${util.escapeHtml(tile.name)}`}</span>
         </div>
         ${badge}
@@ -538,13 +691,14 @@
         <span class="stat-pill">地块 <b>${owned.length}</b></span>
         <span class="stat-pill">建筑 <b>${buildingCount}</b> 层</span>
         <span class="stat-pill stat-pill--gold">申诉信 <b>${p.getOut}</b></span>
+        ${loanPill}
       </div>`;
   }
 
   function updateBoard() {
     const st = Game.state;
     const current = Game.current();
-    D.BOARD.forEach((tile) => {
+    Game.board.forEach((tile) => {
       const el = tileEls[tile.id];
       if (!el) return;
       const prop = st.props[tile.id];
@@ -592,12 +746,14 @@
       const isCurrent = st.current === i && !st.over;
       const status = !p.alive ? '已退役' : p.inJail
         ? `暴力禁赛中 · ${D.CONFIG.jailTurns - p.jailTurns} 次申诉机会`
-        : `地块 ${owned.length} · 建筑 ${buildingCount} 层`;
+        : `地块 ${owned.length} · 建筑 ${buildingCount} 层${p.loanOwed ? ` · 欠款 ${util.fmtCompact(p.loanOwed)}` : ''}`;
+      const isMe = isGuest() ? p.slot === net.slot : i === 0;
+      const tagText = !p.isHuman ? (p.tag || 'AI') : (isMe ? 'YOU' : 'P' + (p.slot + 1));
       return `
         <div class="roster-row${isCurrent ? ' is-current' : ''}${p.alive ? '' : ' is-dead'}" style="--pc:${p.color}">
           <span class="roster-avatar">${p.icon}</span>
           <div class="roster-main">
-            <div class="roster-name">${util.escapeHtml(p.name)}${p.isHuman ? '<span class="tag">YOU</span>' : `<span class="tag">${p.tag || 'AI'}</span>`}</div>
+            <div class="roster-name">${util.escapeHtml(p.name)}<span class="tag">${tagText}</span>${plateMarkup(p, true)}</div>
             <div class="roster-sub">${status}</div>
           </div>
           <div class="roster-money">
@@ -611,10 +767,12 @@
   function updateTicker() {
     const st = Game.state;
     if (!st) return;
-    dom.tickerRound.textContent = `R${st.round}`;
+    dom.tickerRound.textContent = `R${st.round} · ${st.eraName || '第一轮'}`;
     let text = '行情平稳，适合抄底。';
     if (st.headline && st.headlineRound === st.round) {
       text = st.headline;
+    } else if (st.lastTimedEvent && st.lastTimedEvent.round === st.round) {
+      text = `${st.lastTimedEvent.icon} ${st.lastTimedEvent.title}：${st.lastTimedEvent.summary || st.lastTimedEvent.text}`;
     } else if (st.market.length) {
       text = st.market.map((m) => `${m.groupName} 租金 ×${m.mult.toFixed(2)}（至 R${m.untilRound}）`).join('　·　');
     }
@@ -638,8 +796,33 @@
         <span class="market-row__mult${m.mult < 1 ? ' is-down' : ''}">${pct >= 0 ? '+' : ''}${pct}%</span>
       </div>`;
     }).join('');
+    const nextIn = Math.max(0, (st.nextEventRound || 0) - st.round);
     dom.sideMarket.innerHTML = (rows || '<div class="market-empty">暂无行情。租金按基础值结算。</div>')
-      + `<div class="pot-line"><span>罚时池</span><strong>${util.fmt(st.pot)}</strong></div>`;
+      + `<div class="pot-line"><span>罚时池</span><strong>${util.fmt(st.pot)}</strong></div>`
+      + `<div class="pot-line"><span>下次时局事件</span><strong>${nextIn <= 0 ? '本回合' : nextIn + ' 回合后'}</strong></div>`;
+  }
+
+  function updateSynergy() {
+    const st = Game.state;
+    if (!st || !dom.synergyList) return;
+    const who = me() || st.players[0];
+    if (!who) return;
+    const active = Game.activeSynergies(who.id);
+    const mult = Game.synergyMult(who.id);
+    if (dom.synergyNote) dom.synergyNote.textContent = `联动 ×${mult.toFixed(2)}`;
+    if (!active.length) {
+      const pool = D.SYNERGIES.slice(0, 3).map((s) => `<span class="synergy-empty__algo">${s.algos.join(' + ')}</span>`).join('');
+      dom.synergyList.innerHTML = `<div class="synergy-empty">尚未激活联动。同一选手同时拥有组合中的两种算法建筑即可加成。<div class="synergy-empty__list">${pool}</div></div>`;
+      return;
+    }
+    dom.synergyList.innerHTML = active.map((s) => `
+      <div class="synergy-row" title="${util.escapeHtml(s.desc)}">
+        <span class="synergy-row__icon">🔗</span>
+        <span class="synergy-row__main">
+          <strong>${util.escapeHtml(s.name)} <b>×${s.mult.toFixed(2)}</b></strong>
+          <small>${util.escapeHtml(s.algos.join(' + '))}</small>
+        </span>
+      </div>`).join('');
   }
 
   function updateLog(forceBottom) {
@@ -666,7 +849,7 @@
   }
 
   function updateCenter(tileId, flash) {
-    const tile = D.BOARD[tileId];
+    const tile = Game.board[tileId];
     if (!tile) return;
     dom.centerTileCode.textContent = tile.code;
     dom.centerTileName.textContent = tile.name;
@@ -721,7 +904,7 @@
     dom.board.classList.add('is-crashing');
     setTimeout(() => dom.board.classList.remove('is-crashing'), 700);
     if (util.reducedMotion()) return;
-    const tiles = D.BOARD.filter((t) => t.type === 'property').map((t) => t.id);
+    const tiles = Game.board.filter((t) => t.type === 'property').map((t) => t.id);
     util.shuffle(tiles).slice(0, 7).forEach((id, i) => {
       setTimeout(() => flashDisaster(id), i * 55);
     });
@@ -730,6 +913,24 @@
   /* ============================================================
      操作面板
      ============================================================ */
+  function loanButtons(p) {
+    const buttons = [];
+    if (!p.loanTaken) {
+      const principal = Game.loanAmount();
+      const owed = Math.round(principal * (1 + D.CONFIG.loanInterest));
+      buttons.push(`<button class="action-btn action-btn--loan" data-act="loan" type="button">
+        <span class="action-btn__main"><strong>银行贷款</strong><small>一局一次 · 立即到账 ${util.fmt(principal)}，赛程结束偿还 ${util.fmt(owed)}</small></span>
+        <span class="action-btn__side">×1</span>
+      </button>`);
+    } else if (p.loanOwed > 0 && p.tokens >= p.loanOwed) {
+      buttons.push(`<button class="action-btn action-btn--loan" data-act="repay" type="button">
+        <span class="action-btn__main"><strong>提前还贷</strong><small>还清银行贷款，总资产不再被扣减</small></span>
+        <span class="action-btn__side">${util.fmt(p.loanOwed)}</span>
+      </button>`);
+    }
+    return buttons;
+  }
+
   function renderActions() {
     const st = Game.state;
     if (!st) return;
@@ -743,23 +944,39 @@
       return;
     }
 
-    const isHuman = p.isHuman;
+    const isAI = !p.isHuman;
+    const local = isLocalTurn();
     dom.turnState.className = 'turn-state';
-    if (!isHuman) {
+    if (isAI) {
       dom.turnState.classList.add('is-ai');
       dom.turnState.textContent = 'AI 行动中';
     } else if (p.inJail) {
       dom.turnState.classList.add('is-banned');
       dom.turnState.textContent = '暴力禁赛中';
+    } else if (!local) {
+      dom.turnState.classList.add('is-lan');
+      dom.turnState.textContent = '等待 ' + p.name;
     } else if (st.phase === 'roll') {
-      dom.turnState.textContent = '等待掷骰';
+      dom.turnState.textContent = isGuest() ? '你的回合 · 联机' : '等待掷骰';
     } else {
       dom.turnState.textContent = '行动阶段';
     }
 
-    if (!isHuman) {
+    if (isAI) {
       dom.actionButtons.innerHTML = '<div class="action-empty">对手正在计算最优解……<br>你可以点击地块查看行情。</div>';
       dom.actionHint.textContent = p.inJail ? '对手正在为暴力代码写申诉信。' : '等待对手掷骰与建造。';
+      return;
+    }
+
+    if (!local) {
+      dom.actionButtons.innerHTML = `<div class="action-empty">${isGuest() ? '等待房主和队友行动……' : '等待联机选手操作……'}<br>当前由 <b>${util.escapeHtml(p.name)}</b> 行动。</div>`;
+      dom.actionHint.textContent = isGuest() ? '轮到你时，操作按钮会自动出现。' : '客机操作会在房主电脑上结算。';
+      return;
+    }
+
+    if (awaiting) {
+      dom.actionButtons.innerHTML = '<button class="action-btn" type="button" disabled><span class="action-btn__main"><strong>等待房主结算…</strong><small>操作已发送，正在同步局面</small></span></button>';
+      dom.actionHint.textContent = '联机模式下由房主掷骰与结算。';
       return;
     }
 
@@ -770,7 +987,8 @@
     }
 
     if (st.phase === 'jail' && p.inJail) {
-      const canPay = p.tokens >= D.CONFIG.jailFine;
+      const fine = st.jailFine;
+      const canPay = p.tokens >= fine;
       const buttons = [];
       if (p.getOut > 0) {
         buttons.push(`<button class="action-btn action-btn--gold" data-act="jail-card" type="button">
@@ -784,7 +1002,7 @@
       </button>`);
       buttons.push(`<button class="action-btn" data-act="jail-pay" type="button" ${canPay ? '' : 'disabled'}>
         <span class="action-btn__main"><strong>缴纳罚金</strong><small>${canPay ? '立刻离开禁赛区，然后正常掷骰' : 'token 不足，无法缴纳'}</small></span>
-        <span class="action-btn__side">${util.fmt(D.CONFIG.jailFine)}</span>
+        <span class="action-btn__side">${util.fmt(fine)}</span>
       </button>`);
       buttons.push(`<button class="action-btn action-btn--danger" data-act="end" type="button">
         <span class="action-btn__main"><strong>放弃申诉</strong><small>保留在禁赛区，结束本回合</small></span>
@@ -795,38 +1013,40 @@
     }
 
     if (st.phase === 'roll') {
-      dom.actionButtons.innerHTML = `
-        <button class="action-btn action-btn--primary" data-act="roll" type="button">
+      const buttons = [`<button class="action-btn action-btn--primary" data-act="roll" type="button">
           <span class="action-btn__main"><strong>掷骰子</strong><small>两颗 d6，沿棋盘前进</small></span>
           <span class="action-btn__key">SPACE</span>
-        </button>`;
+        </button>`];
+      buttons.push(...loanButtons(p));
+      dom.actionButtons.innerHTML = buttons.join('');
       dom.actionHint.innerHTML = st.doubles > 0
         ? `双数奖励：本回合已掷 <b>${st.doubles}</b> 次双数。`
-        : '经过 AK 起点领取 3,000 token；双数可以再掷一次。';
+        : `经过 AK 起点领取 ${util.fmt(st.salary)} token；双数可以再掷一次。`;
       return;
     }
 
     /* 行动阶段 */
     if (pendingBuy != null) {
-      const tile = D.BOARD[pendingBuy];
+      const tile = Game.board[pendingBuy];
       const afford = p.tokens >= tile.price;
       const isFacility = tile.type === 'facility';
-      dom.actionButtons.innerHTML = `
-        <button class="action-btn action-btn--gold" data-act="buy" type="button" ${afford ? '' : 'disabled'}>
+      const buttons = [`<button class="action-btn action-btn--gold" data-act="buy" type="button" ${afford ? '' : 'disabled'}>
           <span class="action-btn__main"><strong>买下【${tile.name}】</strong><small>${afford ? (isFacility ? '算力设施的过路费随持有数量上涨' : '装入资产表，向路过的同学收租') : 'token 不足'}</small></span>
           <span class="action-btn__side">${util.fmt(tile.price)}</span>
         </button>
         <button class="action-btn" data-act="skip-buy" type="button">
           <span class="action-btn__main"><strong>放弃购买</strong><small>这块地会留在题库里</small></span>
-        </button>`;
+        </button>`];
+      if (!afford) buttons.push(...loanButtons(p));
+      dom.actionButtons.innerHTML = buttons.join('');
       dom.actionHint.textContent = isFacility
-        ? '算力设施没有建筑位；过路费 = 120 × 骰子点数 × 你持有的设施数。'
-        : '停在这里才能购买；集齐同章节三块地后租金翻倍。';
+        ? `算力设施没有建筑位；过路费 = ${st.facilityBase} × 骰子点数 × 你持有的设施数。`
+        : '停在这里才能购买；大棋盘上按章节持有比例加成，集齐仍然 ×2。';
       return;
     }
 
     if (pendingUpgrade != null) {
-      const tile = D.BOARD[pendingUpgrade];
+      const tile = Game.board[pendingUpgrade];
       const prop = st.props[pendingUpgrade];
       const level = prop.algos.length;
       const cost = Game.upgradeCost(pendingUpgrade);
@@ -834,8 +1054,7 @@
       const nextAlgo = tile.algoSet[level];
       const nextRent = Game.rentTable(pendingUpgrade)[Math.min(4, level + 1)];
       const verb = level === 0 ? '建造' : '升级';
-      dom.actionButtons.innerHTML = `
-        <button class="action-btn action-btn--gold" data-act="upgrade" type="button" ${afford ? '' : 'disabled'}>
+      const buttons = [`<button class="action-btn action-btn--gold" data-act="upgrade" type="button" ${afford ? '' : 'disabled'}>
           <span class="action-btn__main"><strong>${verb} Lv.${level + 1}【${util.escapeHtml(nextAlgo ? nextAlgo.name : '算法建筑')}】</strong><small>${afford ? `租金 ${util.fmt(Game.rentFor(pendingUpgrade, 7))} → ${util.fmt(nextRent)} token` : 'token 不足，先去收租'}</small></span>
           <span class="action-btn__side">${util.fmt(cost)}</span>
         </button>
@@ -845,7 +1064,9 @@
         <button class="action-btn" data-act="end" type="button">
           <span class="action-btn__main"><strong>结束回合</strong><small>交给下一位选手</small></span>
           <span class="action-btn__key">↩</span>
-        </button>`;
+        </button>`];
+      if (!afford) buttons.splice(1, 0, ...loanButtons(p));
+      dom.actionButtons.innerHTML = buttons.join('');
       dom.actionHint.innerHTML = `停在自家【${util.escapeHtml(tile.name)}】上，可以直接加盖。升级费用随层数递增，拆除只返还 <b>50%</b>。`;
       return;
     }
@@ -868,6 +1089,8 @@
       </button>`);
     }
 
+    buttons.push(...loanButtons(p));
+
     buttons.push(`<button class="action-btn ${canReroll ? '' : 'action-btn--primary'}" data-act="end" type="button">
       <span class="action-btn__main"><strong>结束回合</strong><small>${canReroll ? '放弃双数奖励，交给下一位' : '结算完成，交给下一位选手'}</small></span>
       <span class="action-btn__key">↩</span>
@@ -877,17 +1100,43 @@
     if (p.inJail) {
       dom.actionHint.textContent = '写暴力被禁赛，本回合只能结束。下回合可以继续申诉。';
     } else if (buildables.length) {
-      dom.actionHint.innerHTML = '点击地块查看租金表；<b>走到自家建筑上</b>可以直接升级，集齐同章节租金 ×2。';
+      dom.actionHint.innerHTML = '点击地块查看租金表；<b>走到自家建筑上</b>可以直接升级。算法联动会额外提高租金。';
     } else {
       dom.actionHint.textContent = '点击棋盘上的地块，可以查看建筑层数、租金和抵押状态。';
     }
   }
+
+  function guestSend(payload) {
+    if (awaiting) return;
+    awaiting = true;
+    awaitingSince = Date.now();
+    awaitingTurn = Game.state ? Game.state.turnSerial : -1;
+    sound.play('click');
+    net.sendAction(payload).catch((err) => {
+      awaiting = false;
+      toast('操作发送失败：' + (err && err.message ? err.message : '网络错误'), 'bad');
+      renderActions();
+    });
+    renderActions();
+  }
+
+  const GUEST_ACTION_MAP = {
+    roll: 'roll', end: 'end', buy: 'buy', 'skip-buy': 'skipBuy',
+    upgrade: 'upgrade', 'skip-upgrade': 'skipUpgrade',
+    'jail-roll': 'jailRoll', 'jail-pay': 'jailPay', 'jail-card': 'jailCard',
+    loan: 'loan', repay: 'repay'
+  };
 
   function onActionClick(e) {
     const btn = e.target.closest('button[data-act]');
     if (!btn || btn.disabled) return;
     const act = btn.dataset.act;
     sound.play('click');
+    if (isGuest()) {
+      if (act === 'build-menu') { openBuildMenu(); return; }
+      if (GUEST_ACTION_MAP[act]) guestSend({ t: GUEST_ACTION_MAP[act] });
+      return;
+    }
     switch (act) {
       case 'roll': humanRoll(); break;
       case 'end': humanEndTurn(); break;
@@ -899,6 +1148,8 @@
       case 'jail-roll': humanJailRoll(); break;
       case 'jail-pay': humanJailPay(); break;
       case 'jail-card': humanJailCard(); break;
+      case 'loan': humanLoan(); break;
+      case 'repay': humanRepay(); break;
       default: break;
     }
   }
@@ -942,19 +1193,35 @@
      ============================================================ */
   function beginTurn() {
     clearTimeout(aiTimer);
+    clearTimeout(remoteTurnTimer);
+    remoteTurnTimer = null;
     const st = Game.state;
     if (!st) return;
     if (st.over) { showEnd(st.endReason); return; }
 
     pendingBuy = null;
     pendingUpgrade = null;
+    awaiting = false;
     const p = Game.current();
     st.phase = p.inJail ? 'jail' : 'roll';
-    if (p.isHuman) {
+    if (p.isHuman && !p.remote) {
       busy = false;
       refresh();
       updateCenter(p.pos, false);
       dom.diceVerdict.textContent = p.inJail ? '禁赛申诉中' : '等待掷骰';
+    } else if (p.isHuman && p.remote) {
+      busy = false;
+      refresh();
+      updateCenter(p.pos, false);
+      dom.diceVerdict.textContent = `等待 ${p.name}`;
+      remoteTurnTimer = setTimeout(() => {
+        if (!Game.state || Game.state.over) return;
+        if (Game.current() && Game.current().id === p.id && p.remote) {
+          Game.log(`${p.name} 长时间没有操作，自动结束回合。`, 'warn');
+          toast(`${p.name} 操作超时，已自动结束回合。`, 'warn');
+          finishTurn(true);
+        }
+      }, 90000);
     } else {
       busy = true;
       refresh();
@@ -1065,9 +1332,9 @@
           sound.play('rent');
           if (res && res.bankrupt) {
             toast(`${player.name} 付不起租金，破产退役。`, 'bad');
-            if (player.isHuman) scheduleEnd('bankrupt');
+            if (shouldEndLocal(player)) scheduleEnd('bankrupt');
           } else if (res) {
-            toast(`${player.isHuman ? '你' : player.name} 向 ${owner.name} 支付 ${util.fmt(res.paid)} token 租金。`, player.isHuman ? 'bad' : 'warn');
+            toast(`${label(player)} 向 ${owner.name} 支付 ${util.fmt(res.paid)} token 租金。`, player.isHuman ? 'bad' : 'warn');
           }
         } else if (landing.action === 'mortgaged') {
           Game.log(`【${landing.tile.name}】已被 ${landing.owner.name} 抵押，本次免租。`, 'info');
@@ -1095,8 +1362,8 @@
         const res = Game.payTax(player, landing.amount);
         sound.play('rent');
         floatAt(landing.tile.id, '-' + util.fmt(res.paid), true);
-        toast(`${player.isHuman ? '你' : player.name} 缴纳罚时费 ${util.fmt(res.paid)} token。`, 'bad');
-        if (res.bankrupt && player.isHuman) scheduleEnd('bankrupt');
+        toast(`${label(player)} 缴纳罚时费 ${util.fmt(res.paid)} token。`, 'bad');
+        if (res.bankrupt && shouldEndLocal(player)) scheduleEnd('bankrupt');
         break;
       }
       case 'parking': {
@@ -1107,7 +1374,7 @@
           Game.log(`${player.name} 在 AK 休息室拿走了罚时池里的 ${util.fmt(amount)} token。`, 'good');
           sound.play('good');
           floatAt(landing.tile.id, '+' + util.fmt(amount), false);
-          toast(`${player.isHuman ? '你' : player.name} 拿走了罚时池的 ${util.fmt(amount)} token！`, 'good');
+          toast(`${label(player)} 拿走了罚时池的 ${util.fmt(amount)} token！`, 'good');
         } else {
           Game.log(`${player.name} 在 AK 休息室休息了一会儿。`, 'info');
         }
@@ -1118,7 +1385,7 @@
           Game.sendToJail(player, '被裁判查到写暴力（三重循环）');
           sound.play('jail');
           if (player.isHuman) unlock('brute');
-          toast(`${player.isHuman ? '你' : player.name} 写暴力被裁判抓包，送进禁赛区。`, 'bad');
+          toast(`${label(player)} 写暴力被裁判抓包，送进禁赛区。`, 'bad');
           st.phase = 'action';
         } else {
           Game.log(`${player.name} 来禁赛区探监，顺便看望了一下老队友。`, 'info');
@@ -1136,7 +1403,7 @@
     checkAchievements();
 
     if (!player.alive) {
-      if (player.isHuman) scheduleEnd('bankrupt');
+      if (shouldEndLocal(player)) scheduleEnd('bankrupt');
       else if (Game.state.over) showEnd();
     } else if (Game.state.over) {
       showEnd(Game.state.endReason);
@@ -1152,7 +1419,7 @@
   /* ---------------- 玩家操作 ---------------- */
   function humanBuy() {
     if (busy || pendingBuy == null || !Game.state || Game.state.over) return;
-    const tile = D.BOARD[pendingBuy];
+    const tile = Game.board[pendingBuy];
     const p = Game.current();
     if (Game.buy(p, tile.id)) {
       sound.play('buy');
@@ -1168,7 +1435,7 @@
 
   function humanSkipBuy() {
     if (busy || pendingBuy == null) return;
-    const tile = D.BOARD[pendingBuy];
+    const tile = Game.board[pendingBuy];
     Game.log(`你放弃了【${tile.name}】。`, 'info');
     pendingBuy = null;
     refresh();
@@ -1176,7 +1443,7 @@
 
   function humanUpgrade() {
     if (busy || pendingUpgrade == null || !Game.state || Game.state.over) return;
-    const tile = D.BOARD[pendingUpgrade];
+    const tile = Game.board[pendingUpgrade];
     const p = Game.current();
     if (!p || !p.isHuman) return;
     const algo = Game.build(p, tile.id);
@@ -1202,7 +1469,7 @@
 
   function humanSkipUpgrade() {
     if (busy || pendingUpgrade == null) return;
-    const tile = D.BOARD[pendingUpgrade];
+    const tile = Game.board[pendingUpgrade];
     Game.log(`你没有继续升级【${tile.name}】。`, 'info');
     pendingUpgrade = null;
     refresh();
@@ -1269,6 +1536,31 @@
     }
   }
 
+  function humanLoan() {
+    const st = Game.state;
+    if (!st || st.over || busy) return;
+    const p = Game.current();
+    if (!p || !p.isHuman) return;
+    const res = Game.takeLoan(p);
+    if (!res) { toast('本次对局已经用过银行贷款了。', 'warn'); return; }
+    sound.play('buy');
+    toast(`🏦 获得银行贷款 ${util.fmt(res.principal)} token，赛程结束需偿还 ${util.fmt(res.owed)} token。`, 'warn');
+    checkAchievements();
+    refresh();
+  }
+
+  function humanRepay() {
+    const st = Game.state;
+    if (!st || st.over || busy) return;
+    const p = Game.current();
+    if (!p || !p.isHuman) return;
+    const paid = Game.repayLoan(p);
+    if (!paid) { toast('token 不足，暂时无法还清贷款。', 'warn'); return; }
+    sound.play('good');
+    toast(`🏦 已还清贷款 ${util.fmt(paid)} token，总资产不再扣减。`, 'good');
+    refresh();
+  }
+
   function humanEndTurn() {
     if (busy || !Game.state || Game.state.over) return;
     pendingBuy = null;
@@ -1282,7 +1574,10 @@
       if (Game.state && Game.state.over) showEnd(Game.state.endReason);
       return;
     }
+    clearTimeout(remoteTurnTimer);
+    remoteTurnTimer = null;
     busy = false;
+    awaiting = false;
     pendingBuy = null;
     pendingUpgrade = null;
     const res = Game.endTurn(force);
@@ -1295,6 +1590,12 @@
       return;
     }
 
+    if (res.eraChanged) {
+      toast(`🕒 进入${Game.eraLabel(Game.state.era)}，随机事件会更频繁。`, 'info');
+    }
+    if (res.timed) {
+      announceTimedEvent(res.timed);
+    }
     if (res.wrapped) {
       const news = Game.nextRoundNews();
       if (news) announceNews(news.news.text);
@@ -1302,6 +1603,21 @@
     }
 
     beginTurn();
+  }
+
+  function announceTimedEvent(timed) {
+    const st = Game.state;
+    const ev = timed.event;
+    if (!st || !ev) return;
+    const text = `🕒 ${ev.title}：${timed.result.summary}`;
+    st.headline = text;
+    st.headlineRound = st.round;
+    dom.tickerText.textContent = text;
+    dom.tickerText.classList.remove('is-fresh');
+    void dom.tickerText.offsetWidth;
+    dom.tickerText.classList.add('is-fresh');
+    sound.play(timed.event.tone === 'bad' ? 'bad' : 'news');
+    toast(`${ev.icon} 时局事件 · ${ev.title}<br><span style="color:#91a8a3;font-size:10px">${util.escapeHtml(timed.result.summary)}</span>`, timed.event.tone === 'bad' ? 'bad' : 'info');
   }
 
   function announceNews(text) {
@@ -1362,7 +1678,7 @@
       await aiMoveTurn(p);
       return;
     }
-    if (choice === 'pay' && p.tokens >= D.CONFIG.jailFine) {
+    if (choice === 'pay' && p.tokens >= Game.state.jailFine) {
       Game.payJailFine(p);
       toast(`${p.name} 缴纳罚金，恢复了比赛资格。`, 'info');
       refresh();
@@ -1408,6 +1724,7 @@
 
   function aiManage(p) {
     if (!p.alive) return;
+    Game.aiLoan(p);
     const target = Game.aiBuildChoice(p);
     if (!target) return;
     const algo = Game.build(p, target.id);
@@ -1428,7 +1745,7 @@
     refresh();
     sound.play('card');
 
-    if (player.isHuman) {
+    if (player.isHuman && !player.remote && !isGuest()) {
       await showCardModal(card, deckName);
     } else {
       toast(`${player.name}：${card.title}`, 'info');
@@ -1485,7 +1802,7 @@
       await resolveLanding(player, depth + 1);
     }
 
-    if (player.isHuman && !player.alive) scheduleEnd('bankrupt');
+    if (shouldEndLocal(player) && !player.alive) scheduleEnd('bankrupt');
     if (Game.state.over) showEnd(Game.state.endReason);
   }
 
@@ -1516,13 +1833,13 @@
 
     if (st.phase === 'jail') {
       if (p.getOut > 0) humanJailCard();
-      else if (p.tokens > D.CONFIG.jailFine + 8000) humanJailPay();
+      else if (p.tokens > Game.state.jailFine + 8000) humanJailPay();
       else humanJailRoll();
       return;
     }
     if (st.phase === 'roll') { humanRoll(); return; }
     if (pendingBuy != null) {
-      const tile = D.BOARD[pendingBuy];
+      const tile = Game.board[pendingBuy];
       const completes = Game.groupProgress(p.id, tile.group) >= 1;
       if (p.tokens >= tile.price && (completes || p.tokens - tile.price > 3500)) humanBuy();
       else humanSkipBuy();
@@ -1566,15 +1883,18 @@
 
   function checkAchievements() {
     if (!Game.state) return;
-    const human = Game.state.players[0];
+    const human = me();
     if (!human) return;
     if (human.stats.buys >= 1) unlock('first_buy');
     if (human.stats.builds >= 10) unlock('builder');
     if (human.stats.cards >= 5) unlock('cards');
     if (human.tokens >= 50000) unlock('rich');
+    if (human.loanTaken) unlock('loan');
     if (D.GROUP_ORDER.some((g) => Game.ownsGroup(human.id, g))) unlock('monopoly');
     const maxed = Game.ownedTiles(human.id).some((t) => Game.state.props[t.id].algos.length >= 4);
     if (maxed) unlock('full_stack');
+    if (Game.activeSynergies(human.id).length) unlock('synergy');
+    if (plateFor(human).id === 'prism') unlock('prism');
   }
 
 
@@ -1658,12 +1978,16 @@
     const tag = (e.target && e.target.tagName ? e.target.tagName : '').toLowerCase();
     if (tag === 'button' || tag === 'input' || tag === 'textarea' || tag === 'select') return;
     const p = Game.current();
-    if (!p || !p.isHuman) return;
+    if (!p || !p.isHuman || !isLocalTurn()) return;
+    e.preventDefault();
+    if (isGuest()) {
+      if (Game.state.phase === 'roll') guestSend({ t: 'roll' });
+      else if (Game.state.phase === 'jail') guestSend({ t: 'jailRoll' });
+      return;
+    }
     if (Game.state.phase === 'roll') {
-      e.preventDefault();
       humanRoll();
     } else if (Game.state.phase === 'jail') {
-      e.preventDefault();
       humanJailRoll();
     }
   }
@@ -1717,13 +2041,15 @@
       </div>
       <div class="rule-section"><h4><span>01</span>目标</h4><p>token 就是钱：买地、建楼、交租、缴纳罚金都用它。在限定回合内成为总资产最高的选手；让其他人全部破产也能提前结束比赛。</p></div>
       <div class="rule-section"><h4><span>02</span>回合</h4><p>掷两颗骰子沿棋盘前进，停在格子上结算。掷出双数可以再掷一次；连续三次双数会被判定为“随机化暴力”，直接送进禁赛区。</p></div>
-      <div class="rule-section"><h4><span>03</span>算法建筑</h4><p>停在无主地块时可以买下。任何自有地块都能建造算法建筑，每块地最多 4 层，每一层都是一个具体算法。层数越高租金越高；集齐同一章节的三块地，基础租金再 ×2。</p></div>
+      <div class="rule-section"><h4><span>03</span>算法建筑 · 联动</h4><p>停在无主地块时可以买下。任何自有地块都能建造算法建筑，每块地最多 4 层，每一层都是一个具体算法。同一选手同时拥有组合中的两种算法（例如“前缀和 + 差分”“Dijkstra + 优先队列”）会激活算法联动，名下全部地块租金按联动倍率相乘，侧栏会显示当前联动。集齐同一章节仍有额外加成，大棋盘按持有比例计算，集齐 ×2。</p></div>
       <div class="rule-section"><h4><span>04</span>走到自家建筑 · 升级</h4><p>停在自家算法建筑上，可以直接加盖一层。升级费用随层数递增，拆除顶层只返还 50% 的造价。在自己回合也可以点击“建造 / 升级算法建筑”批量操作。</p></div>
-      <div class="rule-section"><h4><span>05</span>禁赛区</h4><p>写暴力（brute force）会被裁判查重并禁赛：踩到“暴力检查”、抽到暴力事件，或连续三次双数都会进去。每回合可以：使用申诉信、缴纳 4,000 token 罚金，或掷骰子求双数。三次申诉失败会被强制缴纳罚金。</p></div>
-      <div class="rule-section"><h4><span>06</span>随机事件 · 机惨</h4><p>随机事件里包括“机惨”（机房惨案）：断电、空调漏水、硬盘损坏会让算法建筑随机降 1 层；没有建筑就赔钱。也有 UPS、机惨保险理赔等回血事件。每 4 回合还会出现一次市场行情，某个章节的租金会上涨或下跌。</p></div>
-      <div class="rule-section"><h4><span>07</span>破产</h4><p>付不起租金或赔偿时，系统会自动拆除算法建筑、抵押地块来筹钱；仍然不够就破产退役，名下地块回到题库。抵押中的地块不收租，赎回需要 55% 的原价。</p></div>
-      <div class="rule-section"><h4><span>08</span>罚时池</h4><p>罚时费和罚金会进入 AK 休息室的池子。停在休息室的人可以拿走全部 token。</p></div>
-      <div class="rule-section"><h4><span>09</span>操作</h4><p>空格掷骰子；点击任意地块查看建筑层数、租金与抵押状态；在自己的回合点击“建造 / 升级算法建筑”可以批量加盖。</p></div>
+      <div class="rule-section"><h4><span>05</span>禁赛区</h4><p>写暴力（brute force）会被裁判查重并禁赛：踩到“暴力检查”、抽到暴力事件，或连续三次双数都会进去。每回合可以：使用申诉信、缴纳罚金，或掷骰子求双数。三次申诉失败会被强制缴纳罚金。</p></div>
+      <div class="rule-section"><h4><span>06</span>三轮时局 · 随机事件</h4><p>整局比赛分为三轮时局（起步 / 加速 / 终局）。除了踩到事件格，随着回合推进还会自动触发“时局事件”：省选放榜、机房限电、大纲修订、评测机崩溃等，越到后期触发越频繁。每 4 回合仍会出现一次市场行情。</p></div>
+      <div class="rule-section"><h4><span>07</span>银行贷款（一局一次）</h4><p>每位选手每局可以向银行申请一次贷款：立即获得一笔 token，赛程结束时需要偿还本金 + 25% 利息，未还清会从总资产中扣除。现金不足时系统也会自动帮你申请这一次贷款应急。</p></div>
+      <div class="rule-section"><h4><span>08</span>破产</h4><p>付不起租金或赔偿时，系统会自动拆除算法建筑、抵押地块来筹钱；仍然不够就破产退役，名下地块回到题库。抵押中的地块不收租，赎回需要 55% 的原价。</p></div>
+      <div class="rule-section"><h4><span>09</span>罚时池</h4><p>罚时费和罚金会进入 AK 休息室的池子。停在休息室的人可以拿走全部 token。</p></div>
+      <div class="rule-section"><h4><span>10</span>洛谷难度铭牌</h4><p>每位选手的名字旁边有一枚铭牌，随总资产上升依次变为：入门（红）、普及-（橙）、普及/提高-（黄）、普及+/提高（绿）、提高+/省选-（蓝）、省选/NOI-（紫）、NOI/NOI+（黑）。当总资产达到 260,000 且至少拥有一栋 4 层满配建筑时，会解锁隐藏铭牌「五彩斑斓的黑」。</p></div>
+      <div class="rule-section"><h4><span>11</span>操作 · 局域网</h4><p>空格掷骰子；点击任意地块查看建筑层数、租金与抵押状态；在自己的回合可以批量加盖。局域网联机时，房主运行 <b>start-lan.bat</b>，其他人在同一 Wi-Fi 下打开房主的局域网地址，输入房间号加入；最多 4 人，房主电脑负责全部结算。</p></div>
       <p class="setup-foot" style="margin-top:16px">所有数字与概率都只是游戏设定，不涉及任何真实支付。</p>`;
     openModal({
       wide: true,
@@ -1757,20 +2083,19 @@
   /* ---------------- 地块详情 ---------------- */
   function openTile(tileId) {
     if (!Game.state || endShown) return;
-    const tile = D.BOARD[tileId];
+    const tile = Game.board[tileId];
     if (!tile) return;
     const st = Game.state;
     const prop = st.props[tileId];
     const owner = prop && prop.owner ? Game.player(prop.owner) : null;
-    const human = st.players[0];
-    const current = Game.current();
+    const human = me();
     const isProperty = tile.type === 'property';
     const isFacility = tile.type === 'facility';
     const color = isProperty ? D.GROUPS[tile.group].color : (isFacility ? '#8aa39c' : '#4ff0c0');
     const icon = isProperty ? '📘' : (tile.icon || '✦');
     const price = tile.price ? util.fmt(tile.price) : '—';
-    const canManage = owner && owner.isHuman && current && current.isHuman && !busy && !st.over;
-    const isPurchase = prop && !owner && pendingBuy === tile.id;
+    const canManage = owner && human && owner.id === human.id && isLocalTurn() && !busy && !st.over;
+    const isPurchase = !!(prop && !owner && pendingBuy === tile.id && isLocalTurn());
 
     let meta = `${tile.code}`;
     if (isProperty) meta += ` · ${D.GROUPS[tile.group].name} · 售价 ${price}`;
@@ -1790,7 +2115,7 @@
     if (prop) {
       html += `<div class="tile-detail__owner">
         <span class="dot" style="--pc:${owner ? owner.color : '#3a4d49'}"></span>
-        ${owner ? `${util.escapeHtml(owner.name)} 持有${prop.mortgaged ? ' · 已抵押' : ''}` : '题库 · 无主地块'}
+        ${owner ? `${util.escapeHtml(owner.name)} 持有${prop.mortgaged ? ' · 已抵押' : ''} ${plateMarkup(owner, true)}` : '题库 · 无主地块'}
       </div>`;
     }
 
@@ -1800,10 +2125,13 @@
       const level = prop.algos.length;
       const rows = labels.map((label, i) => `<tr class="${i === level ? 'is-current' : ''}"><td>${label}</td><td>${util.fmt(rents[i])} token</td></tr>`).join('');
       const mult = Game.marketMult(tile.group);
-      const bonus = owner && Game.ownsGroup(owner.id, tile.group);
+      const groupTotal = Game.board.filter((t) => t.type === 'property' && t.group === tile.group).length;
+      const groupMult = owner ? Game.groupRentMult(owner.id, tile.group) : 1;
+      const syn = owner ? Game.synergyMult(owner.id) : 1;
       const invested = Game.investedIn(tileId);
       const nextCost = level < D.CONFIG.maxAlgos ? Game.upgradeCost(tileId) : 0;
-      html += `<div class="subhead"><span>RENT TABLE</span><strong>${bonus ? '章节垄断 · 租金 ×2' : '未集齐章节'}${mult !== 1 ? ` · 行情 ×${mult.toFixed(2)}` : ''}</strong></div>
+      const progress = owner ? Game.groupProgress(owner.id, tile.group) : 0;
+      html += `<div class="subhead"><span>RENT TABLE</span><strong>章节 ×${groupMult.toFixed(2)}${mult !== 1 ? ` · 行情 ×${mult.toFixed(2)}` : ''}${syn > 1 ? ` · 联动 ×${syn.toFixed(2)}` : ''}</strong></div>
         <table class="rent-table">${rows}</table>
         <div class="subhead"><span>ALGORITHM BUILDINGS</span><strong>${level} / 4 层${invested ? ` · 已投入 ${util.fmt(invested)}` : ''}</strong></div>
         <div class="algo-slots">${tile.algoSet.map((a, i) => {
@@ -1811,17 +2139,17 @@
           const cost = Game.costAtLevel(tileId, i + 1);
           return `<div class="algo-slot${filled ? ' is-filled' : ''}">${filled ? util.escapeHtml(a.name) : `Lv.${i + 1} 空地`}<small>${filled ? `Lv.${i + 1} · RUNNING` : `+${util.fmt(cost)}`}</small></div>`;
         }).join('')}</div>`;
-      const progress = owner ? Game.groupProgress(owner.id, tile.group) : 0;
-      html += `<p class="tile-detail__note">${D.GROUPS[tile.group].name}：${owner ? `${owner.name} 已持有 ${progress}/3 块` : '尚无持有者'}。走到自家建筑上可直接升级；集齐整章后租金 ×2。${level < 4 ? `下一层需要 ${util.fmt(nextCost)} token。` : '已经盖满 4 层。'}</p>`;
+      html += `<p class="tile-detail__note">${D.GROUPS[tile.group].name}：${owner ? `${owner.name} 已持有 ${progress}/${groupTotal} 块（章节加成 ×${groupMult.toFixed(2)}）` : '尚无持有者'}。${groupTotal > 3 ? '大棋盘按持有比例加成，集齐仍然 ×2。' : '集齐整章后租金 ×2。'}${level < 4 ? `下一层需要 ${util.fmt(nextCost)} token。` : '已经盖满 4 层。'}</p>`;
     } else if (isFacility) {
       const count = owner ? Game.facilitiesOwned(owner.id) : 0;
-      html += `<div class="subhead"><span>RENT FORMULA</span><strong>${D.CONFIG.facilityRentBase} × 骰子点数 × 设施数</strong></div>
+      const facilityTotal = Game.board.filter((t) => t.type === 'facility').length;
+      html += `<div class="subhead"><span>RENT FORMULA</span><strong>${st.facilityBase} × 骰子点数 × 设施数</strong></div>
         <table class="rent-table">
-          <tr><td>持有设施</td><td>${count} / 4</td></tr>
-          <tr><td>两颗骰子平均租金</td><td>${util.fmt(D.CONFIG.facilityRentBase * count * 7)} token</td></tr>
+          <tr><td>持有设施</td><td>${count} / ${facilityTotal}</td></tr>
+          <tr><td>两颗骰子平均租金</td><td>${util.fmt(st.facilityBase * count * 7)} token</td></tr>
           <tr><td>抵押价值</td><td>${util.fmt(Math.round(tile.price * 0.5))} token</td></tr>
         </table>
-        <p class="tile-detail__note">算力设施没有建筑位。四座设施全部拿下，过路费会非常可观。</p>`;
+        <p class="tile-detail__note">算力设施没有建筑位。${facilityTotal} 座设施全部拿下，过路费会非常可观。</p>`;
     }
 
     const actions = [];
@@ -1882,8 +2210,13 @@
       closable: true
     }).then((value) => {
       if (!value) return;
+      if (isGuest()) {
+        if (value === 'buy') pendingBuy = null;
+        guestSend({ t: 'tile', id: tile.id, op: value });
+        return;
+      }
       const p = Game.current();
-      if (!p || !p.isHuman) return;
+      if (!p || !p.isHuman || p.remote) return;
       let changed = false;
       if (value === 'buy') {
         if (Game.buy(p, tile.id)) {
@@ -1931,10 +2264,9 @@
   }
 
   function openBuildMenu() {
-    if (!Game.state || busy) return;
-    const human = Game.state.players[0];
-    const current = Game.current();
-    if (!current || !current.isHuman) return;
+    if (!Game.state || busy || !isLocalTurn()) return;
+    const human = me();
+    if (!human) return;
     const candidates = Game.ownedTiles(human.id).filter((t) => {
       const prop = Game.state.props[t.id];
       return t.type === 'property' && !prop.mortgaged && prop.algos.length < D.CONFIG.maxAlgos;
@@ -1975,6 +2307,11 @@
       ]
     }).then((value) => {
       if (!value) return;
+      if (isGuest()) {
+        if (value === 'all') guestSend({ t: 'buildAll' });
+        else if (value.indexOf('build:') === 0) guestSend({ t: 'build', id: Number(value.slice(6)) });
+        return;
+      }
       let built = 0;
       if (value === 'all') {
         for (let i = 0; i < 20; i++) {
@@ -1999,6 +2336,429 @@
     });
   }
 
+  /* ============================================================
+     局域网联机
+     ============================================================ */
+  function lanConfigFromForm() {
+    const cfg = {
+      size: selected.size,
+      difficulty: selected.diff,
+      rounds: selected.rounds,
+      count: selected.count
+    };
+    $$('[data-lan-config]', dom.modalRoot).forEach((el) => {
+      const key = el.dataset.lanConfig;
+      if (key === 'size') cfg.size = Number(el.value) || cfg.size;
+      else if (key === 'difficulty') cfg.difficulty = el.value || cfg.difficulty;
+      else if (key === 'rounds') cfg.rounds = Number(el.value) || cfg.rounds;
+      else if (key === 'count') cfg.count = Number(el.value) || cfg.count;
+    });
+    return cfg;
+  }
+
+  function lanAddressText() {
+    try {
+      return location.origin && location.origin !== 'null' ? location.origin : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function renderLanLobby(view) {
+    const body = document.getElementById('lanLobbyBody');
+    if (!body || !view) return;
+    lastRoomView = view;
+    const isHost = net.mode === 'host';
+    const cfg = view.config || {};
+    const address = lanAddressText();
+    const players = view.players || [];
+    const slots = [];
+    for (let i = 0; i < (view.maxPlayers || 4); i++) {
+      const p = players.find((x) => x.slot === i);
+      slots.push(`<div class="lan-seat${p ? ' is-filled' : ''}${p && p.host ? ' is-host' : ''}">
+        <span class="lan-seat__num">P${i + 1}</span>
+        <span class="lan-seat__name">${p ? util.escapeHtml(p.name) : '等待加入…'}</span>
+        <span class="lan-seat__badge">${p ? (p.host ? '房主' : (p.connected ? '在线' : '重连中')) : '空位'}</span>
+      </div>`);
+    }
+    const sizeOpt = D.BOARD_SIZE_ORDER.map((s) => `<option value="${s}" ${Number(cfg.size) === s ? 'selected' : ''}>${D.SIZE_PRESETS[s].name}</option>`).join('');
+    const diffOpt = Object.keys(D.DIFFICULTIES).map((k) => `<option value="${k}" ${cfg.difficulty === k ? 'selected' : ''}>${D.DIFFICULTIES[k].name}</option>`).join('');
+    const roundOpt = [15, 25, 40].map((r) => `<option value="${r}" ${Number(cfg.rounds) === r ? 'selected' : ''}>${r} 回合</option>`).join('');
+    const countOpt = [2, 3, 4].map((c) => `<option value="${c}" ${Number(cfg.count) === c ? 'selected' : ''}>${c} 名选手</option>`).join('');
+    const settings = isHost ? `
+      <div class="lan-settings">
+        <label><span>棋盘</span><select data-lan-config="size">${sizeOpt}</select></label>
+        <label><span>难度</span><select data-lan-config="difficulty">${diffOpt}</select></label>
+        <label><span>赛程</span><select data-lan-config="rounds">${roundOpt}</select></label>
+        <label><span>总人数</span><select data-lan-config="count">${countOpt}</select></label>
+      </div>` : `
+      <div class="lan-readonly">
+        <span>${D.SIZE_PRESETS[cfg.size] ? D.SIZE_PRESETS[cfg.size].name : cfg.size + ' 格'}</span>
+        <span>${D.DIFFICULTIES[cfg.difficulty] ? D.DIFFICULTIES[cfg.difficulty].name : '常规赛'}</span>
+        <span>${cfg.rounds} 回合</span>
+        <span>${cfg.count} 名选手</span>
+      </div>`;
+    const hostActions = isHost
+      ? `<button class="btn btn--primary" type="button" data-lan-act="start">开始比赛</button>
+         <button class="btn btn--ghost" type="button" data-lan-act="copy">复制房间信息</button>
+         <button class="btn btn--danger" type="button" data-lan-act="leave">解散房间</button>`
+      : `<div class="lan-wait"><span class="pulse-dot"></span>等待房主开始比赛…</div>
+         <button class="btn btn--danger" type="button" data-lan-act="leave">离开房间</button>`;
+    body.innerHTML = `
+      <div class="modal__head">
+        <div class="modal__icon">📶</div>
+        <div><p class="kicker">LAN MULTIPLAYER</p><h3>${isHost ? '联机房间已创建' : '已加入联机房间'}</h3></div>
+      </div>
+      <div class="lan-code-row">
+        <div class="lan-code"><span>房间号</span><strong>${view.code}</strong></div>
+        <div class="lan-address"><span>其他设备访问</span><strong>${address || '请通过 start-lan.bat 打开页面'}</strong></div>
+      </div>
+      <div class="lan-seats">${slots.join('')}</div>
+      ${settings}
+      <p class="lan-hint">${isHost ? '把房间号和上面的访问地址告诉队友；他们打开地址后点「局域网联机 → 加入房间」。' : '房主开始比赛后会自动进入棋盘。'}</p>
+      <div class="lan-actions">${hostActions}</div>`;
+  }
+
+  async function openLanEntry() {
+    const saved = storage.get(D.STORAGE.lanName, '') || '';
+    const html = `
+      <div class="modal__head">
+        <div class="modal__icon">📶</div>
+        <div><p class="kicker">LAN MULTIPLAYER</p><h3>局域网联机</h3></div>
+      </div>
+      <p>同一 Wi-Fi 下最多 4 人。房主需要先运行 <b>start-lan.bat</b>，其他人用浏览器打开房主电脑的局域网地址。</p>
+      <div class="lan-entry">
+        <label class="lan-field"><span>你的名字</span><input id="lanNameInput" maxlength="12" value="${util.escapeHtml(saved)}" placeholder="例如：机房一哥"></label>
+        <label class="lan-field"><span>房间号（加入时填写）</span><input id="lanCodeInput" maxlength="6" inputmode="numeric" placeholder="4 位数字"></label>
+        <div class="lan-entry__actions">
+          <button class="btn btn--primary" type="button" data-lan-act="create">创建房间</button>
+          <button class="btn btn--ghost" type="button" data-lan-act="join">加入房间</button>
+        </div>
+        <div class="lan-status" id="lanStatus"></div>
+      </div>
+      <p class="setup-foot" style="text-align:left">没有启动服务器？直接双击游戏目录里的 <b>start-lan.bat</b>，它会自动打开本机页面并显示局域网地址。</p>`;
+    openModal({
+      wide: true,
+      className: 'modal--lan',
+      html,
+      actions: [{ label: '关闭', value: null, className: 'btn--ghost' }]
+    });
+  }
+
+  function setLanStatus(text, bad) {
+    const el = document.getElementById('lanStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('is-bad', !!bad);
+  }
+
+  async function createLanRoom() {
+    lobbyConfig = null;
+    const nameEl = document.getElementById('lanNameInput');
+    const name = (nameEl && nameEl.value || '').trim() || '房主';
+    storage.set(D.STORAGE.lanName, name);
+    setLanStatus('正在创建房间……');
+    try {
+      const data = await net.createRoom(name, {
+        size: selected.size, difficulty: selected.diff, rounds: selected.rounds, count: selected.count
+      });
+      lanLobbyOpen = true;
+      closeModal();
+      showLanLobby();
+      renderLanLobby(data.view);
+    } catch (err) {
+      setLanStatus('创建失败：' + (err && err.message ? err.message : '未连接服务器') + '（请先运行 start-lan.bat）', true);
+    }
+  }
+
+  async function joinLanRoom() {
+    lobbyConfig = null;
+    const nameEl = document.getElementById('lanNameInput');
+    const codeEl = document.getElementById('lanCodeInput');
+    const name = (nameEl && nameEl.value || '').trim() || '选手';
+    const code = (codeEl && codeEl.value || '').trim();
+    if (!/^\d{3,6}$/.test(code)) {
+      setLanStatus('请输入正确的房间号。', true);
+      return;
+    }
+    storage.set(D.STORAGE.lanName, name);
+    setLanStatus('正在加入房间……');
+    try {
+      const data = await net.joinRoom(code, name);
+      lanLobbyOpen = true;
+      closeModal();
+      showLanLobby();
+      if (data && data.view) renderLanLobby(data.view);
+    } catch (err) {
+      setLanStatus('加入失败：' + (err && err.message ? err.message : '房间不存在') + '（确认已运行 start-lan.bat）', true);
+    }
+  }
+
+  function showLanLobby() {
+    openModal({
+      wide: true,
+      className: 'modal--lan',
+      html: '<div id="lanLobbyBody" class="lan-body"><p class="lan-status">正在连接房间……</p></div>',
+      actions: [],
+      closable: true
+    }).then(() => {
+      if (!lanLobbyOpen) return;
+      lanLobbyOpen = false;
+      if (net.isLan() && !net.started && !Game.state) {
+        net.leave(true);
+        net.reset();
+        if (dom.lanChip) dom.lanChip.hidden = true;
+      }
+    });
+    if (lastRoomView) renderLanLobby(lastRoomView);
+  }
+
+  async function startLanHost(view) {
+    const room = view || lastRoomView;
+    if (!room) return;
+    const cfg = Object.assign({}, room.config || {}, lanConfigFromForm(), lobbyConfig || {});
+    cfg.count = Math.max(cfg.count || 3, (room.players || []).length);
+    let roster = (room.players || []).map((p) => ({ slot: p.slot, name: p.name }));
+    try {
+      const started = await net.startGame(cfg);
+      if (started && started.roster && started.roster.length) roster = started.roster;
+    } catch (err) {
+      toast('开始失败：' + (err && err.message ? err.message : '网络错误'), 'bad');
+      return;
+    }
+    if (!roster.length) return;
+    lanLobbyOpen = false;
+    closeModal();
+    selected = { diff: cfg.difficulty, count: Math.max(roster.length, cfg.count), rounds: cfg.rounds, size: cfg.size };
+    resetGameUI();
+    Game.create({
+      difficulty: cfg.difficulty,
+      count: Math.max(roster.length, cfg.count),
+      rounds: cfg.rounds,
+      boardSize: cfg.size,
+      humans: roster,
+      localSlot: net.slot,
+      lan: true
+    });
+    enterGame();
+    beginTurn();
+  }
+
+  function startLanGuest(payload) {
+    const cfg = payload.config || {};
+    lanLobbyOpen = false;
+    closeModal();
+    resetGameUI();
+    guestInit = true;
+    Game.boardSize = cfg.size || 40;
+    Game.board = D.getBoard(Game.boardSize);
+    Game.state = null;
+    dom.setupScreen.hidden = true;
+    dom.gameScreen.hidden = false;
+    if (dom.lanChip) {
+      dom.lanChip.hidden = false;
+      dom.lanChip.textContent = `📶 联机 ${net.room}`;
+    }
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    tileEls = {};
+    tileRefs = {};
+    pawnEls = {};
+    dom.pawnLayer.innerHTML = '';
+    dom.gameLog.innerHTML = '';
+    dom.centerTileCode.textContent = 'SYNC';
+    dom.centerTileName.textContent = '等待房主同步局面';
+    dom.centerTileDesc.textContent = '房主开始比赛后，棋盘状态会通过局域网同步过来。';
+    dom.diceVerdict.textContent = '等待同步';
+    buildBoard();
+    dom.actionButtons.innerHTML = '<div class="action-empty">等待房主同步局面……</div>';
+    dom.actionHint.textContent = '联机模式由房主电脑结算，客机只负责显示与操作。';
+    dom.turnState.textContent = '同步中';
+  }
+
+  function onNetRoom(view) {
+    lastRoomView = view;
+    net.applyRoom(view);
+    if (lanLobbyOpen) renderLanLobby(view);
+  }
+
+  function onNetStart(payload) {
+    netDebug.start += 1;
+    if (net.mode === 'guest') {
+      try {
+        startLanGuest(payload);
+        netDebug.skip = 'guest-started';
+      } catch (e) {
+        netDebug.error = 'start:' + (e && e.message);
+        console.error(e);
+      }
+    }
+  }
+
+  function onNetAction(from, payload) {
+    if (net.mode !== 'host' || !Game.state || Game.state.over) return;
+    const p = Game.current();
+    if (!p || !p.isHuman || p.slot !== from) return;
+    clearTimeout(remoteTurnTimer);
+    remoteTurnTimer = null;
+    handleHostAction(p, payload || {});
+  }
+
+  function onNetSnapshot(snap) {
+    netDebug.snapshot += 1;
+    netDebug.skip = 'snap:' + (net.mode || '?') + ':' + (snap ? Object.keys(snap).join('|') : 'null');
+    if (net.mode !== 'guest' || !snap || !snap.state) return;
+    const st = snap.state;
+    const first = !Game.state;
+    if (Game.boardSize !== st.boardSize) {
+      Game.boardSize = st.boardSize;
+      Game.board = D.getBoard(st.boardSize);
+    }
+    Game.state = st;
+    if (snap.ui) {
+      pendingBuy = snap.ui.pendingBuy == null ? null : snap.ui.pendingBuy;
+      pendingUpgrade = snap.ui.pendingUpgrade == null ? null : snap.ui.pendingUpgrade;
+    }
+    const hostBusy = !!(snap.ui && snap.ui.busy);
+    const sameTurn = awaitingTurn === st.turnSerial;
+    const settled = !sameTurn || (Date.now() - awaitingSince > 700 && !hostBusy);
+    awaiting = hostBusy || (awaiting && !settled);
+    if (first) {
+      dom.setupScreen.hidden = true;
+      dom.gameScreen.hidden = false;
+      if (dom.lanChip) {
+        dom.lanChip.hidden = false;
+        dom.lanChip.textContent = `📶 联机 ${net.room}`;
+      }
+      buildBoard();
+      buildPawns();
+    }
+    if (st.lastRoll) {
+      setDie(dom.dieA, st.lastRoll.a);
+      setDie(dom.dieB, st.lastRoll.b);
+      dom.diceVerdict.textContent = `${st.lastRoll.a} + ${st.lastRoll.b} = ${st.lastRoll.total}${st.lastRoll.double ? ' · 双数！' : ''}`;
+    } else {
+      dom.diceVerdict.textContent = st.phase === 'jail' ? '禁赛申诉中' : '等待掷骰';
+    }
+    refresh();
+    layoutPawns();
+    const cur = Game.current();
+    if (cur) updateCenter(cur.pos, false);
+    if (st.over) showEnd(st.endReason);
+  }
+
+  function handleHostAction(p, payload) {
+    switch (payload.t) {
+      case 'roll': humanRoll(); break;
+      case 'end': humanEndTurn(); break;
+      case 'buy': humanBuy(); break;
+      case 'skipBuy': humanSkipBuy(); break;
+      case 'upgrade': humanUpgrade(); break;
+      case 'skipUpgrade': humanSkipUpgrade(); break;
+      case 'build': {
+        const algo = Game.build(p, Number(payload.id));
+        if (algo) {
+          sound.play('build');
+          toast(`${p.name} 加盖了【${Game.board[Number(payload.id)].name}】。`, 'info');
+          checkAchievements();
+          refresh();
+        }
+        break;
+      }
+      case 'buildAll': {
+        let built = 0;
+        for (let i = 0; i < 20; i++) {
+          const list = Game.ownedTiles(p.id).filter((t) => Game.canBuild(p, t.id));
+          if (!list.length) break;
+          list.sort((a, b) => Game.rentTable(b.id)[Math.min(4, Game.state.props[b.id].algos.length + 1)]
+            - Game.rentTable(a.id)[Math.min(4, Game.state.props[a.id].algos.length + 1)]);
+          if (Game.build(p, list[0].id)) built += 1;
+          else break;
+        }
+        if (built) {
+          sound.play('build');
+          toast(`${p.name} 一键加盖了 ${built} 层算法建筑。`, 'info');
+          checkAchievements();
+          refresh();
+        }
+        break;
+      }
+      case 'tile': handleHostTileAction(p, Number(payload.id), payload.op); break;
+      case 'loan': humanLoan(); break;
+      case 'repay': humanRepay(); break;
+      case 'jailRoll': humanJailRoll(); break;
+      case 'jailPay': humanJailPay(); break;
+      case 'jailCard': humanJailCard(); break;
+      default: break;
+    }
+  }
+
+  function handleHostTileAction(p, tileId, op) {
+    const tile = Game.board[tileId];
+    const prop = Game.state.props[tileId];
+    if (!tile || !prop) return;
+    if (op === 'buy') {
+      if (pendingBuy !== tileId) return;
+      if (Game.buy(p, tileId)) {
+        pendingBuy = null;
+        sound.play('buy');
+        toast(`${p.name} 买下【${tile.name}】。`, 'info');
+      }
+    } else if (prop.owner !== p.id) {
+      return;
+    } else if (op === 'build') {
+      if (Game.build(p, tileId)) {
+        sound.play('build');
+        toast(`${p.name} 加盖了【${tile.name}】。`, 'info');
+      }
+    } else if (op === 'sell') {
+      if (Game.sellAlgo(p, tileId)) {
+        sound.play('sell');
+        toast(`${p.name} 拆除了【${tile.name}】的顶层。`, 'info');
+      }
+    } else if (op === 'mortgage') {
+      if (Game.mortgage(p, tileId)) sound.play('sell');
+    } else if (op === 'redeem') {
+      if (Game.redeem(p, tileId)) sound.play('buy');
+    }
+    checkAchievements();
+    refresh();
+    updateCenter(tileId, true);
+  }
+
+  function onLanModalClick(e) {
+    const btn = e.target.closest('[data-lan-act]');
+    if (!btn) return;
+    const act = btn.dataset.lanAct;
+    if (act === 'create') createLanRoom();
+    else if (act === 'join') joinLanRoom();
+    else if (act === 'start') startLanHost(lastRoomView);
+    else if (act === 'copy') {
+      const text = `信奥大富翁联机：${lanAddressText()} 房间号 ${net.room}`;
+      try {
+        navigator.clipboard.writeText(text);
+        toast('房间信息已复制。', 'good');
+      } catch (err) {
+        toast(text, 'info');
+      }
+    } else if (act === 'leave') {
+      lanLobbyOpen = false;
+      lobbyConfig = null;
+      closeModal();
+      net.leave(true);
+      net.reset();
+      if (dom.lanChip) dom.lanChip.hidden = true;
+      updateSetupUI();
+    }
+  }
+
+  function onLanConfigChange(e) {
+    const el = e.target.closest('[data-lan-config]');
+    if (!el || net.mode !== 'host' || !net.room) return;
+    const cfg = lanConfigFromForm();
+    lobbyConfig = cfg;
+    net.setConfig(cfg).catch(() => toast('设置已记录，开始比赛时会以本地设置为准。', 'warn'));
+  }
+
   /* ---------------- 结算 ---------------- */
   function showEnd(reason) {
     if (endShown || !Game.state) return;
@@ -2010,34 +2770,37 @@
     if (modalClose) closeModal();
 
     const st = Game.state;
-    if (!st.over) {
+    if (!st.over && !isGuest()) {
       Game.finish(reason || 'manual');
     }
-    const human = st.players[0];
+    const human = me() || st.players[0];
     const winner = st.winner || st.ranking[0] || human;
     const rank = st.ranking.indexOf(human) + 1;
-    const humanWin = winner && winner.isHuman && human.alive;
-    const net = human.alive ? Game.netWorth(human) : 0;
+    const humanWin = winner && human && winner.id === human.id && human.alive;
+    const net = human && human.alive ? Game.netWorth(human) : 0;
     const played = reason === 'rounds' || st.endReason === 'rounds'
       ? Math.min(st.round, st.maxRounds)
       : st.round;
 
+    if (OI.Net.isLan()) unlock('lan');
     if (humanWin) {
       unlock('winner');
       if (human.minTokens < 1000) unlock('comeback');
     }
-    if (!human.alive) unlock('bankrupt');
+    if (human && !human.alive) unlock('bankrupt');
 
-    const best = Number(storage.get(D.STORAGE.best, 0)) || 0;
-    if (net > best) storage.set(D.STORAGE.best, net);
-    const stats = storage.get(D.STORAGE.stats, { games: 0, wins: 0 }) || { games: 0, wins: 0 };
-    if (!st.resultSaved) {
-      stats.games = (stats.games || 0) + 1;
-      if (humanWin) stats.wins = (stats.wins || 0) + 1;
-      storage.set(D.STORAGE.stats, stats);
-      st.resultSaved = true;
+    if (!isGuest()) {
+      const best = Number(storage.get(D.STORAGE.best, 0)) || 0;
+      if (net > best) storage.set(D.STORAGE.best, net);
+      const stats = storage.get(D.STORAGE.stats, { games: 0, wins: 0 }) || { games: 0, wins: 0 };
+      if (!st.resultSaved) {
+        stats.games = (stats.games || 0) + 1;
+        if (humanWin) stats.wins = (stats.wins || 0) + 1;
+        storage.set(D.STORAGE.stats, stats);
+        st.resultSaved = true;
+      }
+      updateBestRecord();
     }
-    updateBestRecord();
 
     let title;
     let sub;
@@ -2052,17 +2815,19 @@
       sub = `${winner.name} 以 ${util.fmt(Game.netWorth(winner))} 总资产拿下第一。再开一局，把 TA 的地买下来。`;
     }
     if (st.endReason === 'rounds') sub += ' 赛程耗尽，按总资产结算。';
+    if (plate.id === 'prism' && humanWin) title = '五彩斑斓的黑';
 
     dom.endTitle.textContent = title;
     dom.endSub.textContent = sub;
 
     dom.endRanking.innerHTML = st.ranking.map((p, i) => {
       const worth = p.alive ? Game.netWorth(p) : 0;
+      const isSelf = human && p.id === human.id;
       return `<div class="end-row${i === 0 ? ' is-first' : ''}" style="--pc:${p.color}">
         <div class="end-row__rank">${i + 1}</div>
         <div class="end-row__avatar" style="border-color:${hexA(p.color, 0.35)}">${p.icon}</div>
-        <div class="end-row__name">${util.escapeHtml(p.name)}
-          ${p.isHuman ? '<small>你</small>' : `<small>${p.tag || 'AI'}</small>`}
+        <div class="end-row__name">${util.escapeHtml(p.name)} ${plateMarkup(p, true)}
+          ${isSelf ? '<small>你</small>' : `<small>${p.isHuman ? 'P' + (p.slot + 1) : (p.tag || 'AI')}</small>`}
           ${!p.alive ? '<small style="color:#ff9b9b">已退役</small>' : ''}
         </div>
         <div class="end-row__money">${p.alive ? util.fmt(worth) : '退役'}<small>总资产</small></div>
@@ -2072,12 +2837,16 @@
     const owned = Game.ownedTiles(human.id);
     const algos = Game.buildingCount(human.id);
     const maxLevel = owned.reduce((n, t) => Math.max(n, st.props[t.id].algos.length), 0);
+    const plate = plateFor(human);
     dom.endStats.innerHTML = `
       <div class="end-stat"><span>赛程</span><strong>${played}/${st.maxRounds}</strong></div>
       <div class="end-stat"><span>你的总资产</span><strong>${util.fmt(net)}</strong></div>
       <div class="end-stat"><span>地块 / 建筑</span><strong>${owned.length} / ${algos}</strong></div>
       <div class="end-stat"><span>最高建筑</span><strong>Lv.${maxLevel}</strong></div>
-      <div class="end-stat"><span>抽到事件</span><strong>${human.stats.cards}</strong></div>`;
+      <div class="end-stat"><span>难度铭牌</span><strong style="color:${plate.color}">${plate.name}</strong></div>
+      <div class="end-stat"><span>抽到事件</span><strong>${human.stats.cards}</strong></div>
+      <div class="end-stat"><span>银行欠款</span><strong>${human.loanOwed ? util.fmt(human.loanOwed) : '—'}</strong></div>
+      <div class="end-stat"><span>算法联动</span><strong>×${Game.synergyMult(human.id).toFixed(2)}</strong></div>`;
 
     dom.endScreen.hidden = false;
     refresh();
@@ -2116,10 +2885,13 @@
 
   /* 对外暴露，方便调试与自动化测试 */
   window.OI_UI = {
-    startGame, backToLobby, refresh, humanRoll, humanUpgrade, humanSkipUpgrade, openTile, openBuildMenu, showCardModal,
+    startGame, backToLobby, refresh, humanRoll, humanUpgrade, humanSkipUpgrade,
+    humanBuy, humanSkipBuy, humanEndTurn, humanJailRoll, humanJailPay, humanJailCard,
+    humanLoan, humanRepay, openTile, openBuildMenu, showCardModal, openLanEntry,
     get busy() { return busy; },
     get pendingBuy() { return pendingBuy; },
-    get pendingUpgrade() { return pendingUpgrade; }
+    get pendingUpgrade() { return pendingUpgrade; },
+    get awaiting() { return awaiting; }
   };
 
   init();

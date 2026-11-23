@@ -418,3 +418,35 @@ body.is-modal { overflow: hidden; }
 .pot-line strong { color: var(--gold); font-family: var(--mono); font-size: 11px; }
 .market-card .market-list { gap: 5px; }
 .market-card .market-row { padding: 6px 8px; }
+
+/* ---------------- 联机 / 贷款 / 时局 ---------------- */
+.turn-state.is-lan { color: var(--cyan); }
+.stat-pill--debt { border-color: rgba(255, 107, 107, 0.3); color: #ffb3b3; }
+.stat-pill--debt b { color: #ff8f8f; }
+.turn-card__name { flex-wrap: wrap; }
+
+.action-btn--loan {
+  border-color: rgba(240, 201, 121, 0.3);
+  background: linear-gradient(135deg, rgba(240, 201, 121, 0.12), rgba(255, 255, 255, 0.02));
+}
+.action-btn--loan .action-btn__main strong { color: #ffe6ae; }
+
+.synergy-card .synergy-list { display: flex; flex-direction: column; gap: 5px; }
+.synergy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(79, 240, 192, 0.16);
+  border-radius: 8px;
+  background: rgba(79, 240, 192, 0.045);
+}
+.synergy-row__icon { font-size: 13px; filter: drop-shadow(0 0 6px rgba(79, 240, 192, 0.4)); }
+.synergy-row__main { min-width: 0; flex: 1; }
+.synergy-row__main strong { display: block; color: #c9ffed; font-size: 10.5px; font-weight: 600; }
+.synergy-row__main strong b { color: var(--gold); font-family: var(--mono); font-size: 9.5px; }
+.synergy-row__main small { display: block; margin-top: 1px; color: var(--dim); font-size: 8.5px; }
+
+.synergy-empty { padding: 7px 8px; border: 1px dashed var(--line); border-radius: 8px; color: var(--dim); font-size: 9.5px; line-height: 1.6; }
+.synergy-empty__list { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; }
+.synergy-empty__algo { color: rgba(145, 168, 163, 0.72); font-family: var(--mono); font-size: 8px; }

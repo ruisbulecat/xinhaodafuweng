@@ -100,6 +100,7 @@
         </span>
       </button>
       <div class="topbar__right">
+        <span class="lan-chip" id="lanChip" hidden>📶 联机</span>
         <div class="bankroll" role="status" aria-live="polite">
           <span class="bankroll__label">钱包 · token</span>
           <strong class="bankroll__value" id="topbarTokens">20,000</strong>
@@ -181,11 +182,20 @@
           </div>
 
           <div class="setup-step">
-            <div class="step-head"><span class="step-num">03</span><h3>赛程长度</h3><span class="step-note">回合结束结算</span></div>
+            <div class="step-head"><span class="step-num">03</span><h3>赛程长度</h3><span class="step-note">三轮时局 · 回合结束结算</span></div>
             <div class="segmented" id="roundChoices">
               <button class="segment" type="button" data-rounds="15"><strong>15 回合</strong><small>快棋</small></button>
               <button class="segment is-active" type="button" data-rounds="25"><strong>25 回合</strong><small>标准</small></button>
               <button class="segment" type="button" data-rounds="40"><strong>40 回合</strong><small>马拉松</small></button>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="step-head"><span class="step-num">04</span><h3>棋盘尺寸</h3><span class="step-note" id="sizeNote">经典 40 格</span></div>
+            <div class="segmented" id="sizeChoices">
+              <button class="segment is-active" type="button" data-size="40"><strong>40 格</strong><small>经典</small></button>
+              <button class="segment" type="button" data-size="72"><strong>72 格</strong><small>进阶</small></button>
+              <button class="segment" type="button" data-size="96"><strong>96 格</strong><small>大型</small></button>
             </div>
           </div>
 
@@ -197,6 +207,11 @@
           <button class="btn btn--primary btn--block" id="startBtn" type="button">
             <span>进入机房</span>
             <svg class="icon"><use href="#i-arrow"></use></svg>
+          </button>
+          <button class="btn btn--ghost btn--block btn--lan" id="lanBtn" type="button">
+            <span class="lan-btn__icon">📶</span>
+            <span>局域网联机</span>
+            <small>同一 Wi-Fi 最多 4 人</small>
           </button>
           <p class="setup-foot">空格掷骰子 · 走到自家建筑可升级 · 刷新页面会重开对局</p>
         </aside>
@@ -221,6 +236,8 @@
                 </div>
                 <div class="center-meta" id="centerMeta">
                   <span id="centerRound">ROUND 01 / 25</span>
+                  <span class="center-meta__divider"></span>
+                  <span id="centerEra">第一轮 · 起步</span>
                   <span class="center-meta__divider"></span>
                   <span id="centerPot">罚时池 0</span>
                 </div>
@@ -276,6 +293,14 @@
               <div class="market-list" id="sideMarket"></div>
             </div>
 
+            <div class="side-card synergy-card">
+              <div class="side-head">
+                <span class="side-kicker">SYNERGY</span>
+                <span class="side-note" id="synergyNote">联动 ×1.00</span>
+              </div>
+              <div class="synergy-list" id="synergyList"></div>
+            </div>
+
             <div class="side-card log-card">
               <div class="side-head">
                 <span class="side-kicker">JUDGE LOG</span>
@@ -313,6 +338,7 @@
   <script src="js/data.js"></script>
   <script src="js/core.js"></script>
   <script src="js/engine.js"></script>
+  <script src="js/net.js"></script>
   <script src="js/ui.js"></script>
 </body>
 </html>

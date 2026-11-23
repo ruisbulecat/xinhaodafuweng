@@ -7,55 +7,96 @@
 
   const D = OI.DATA;
   const CONFIG = D.CONFIG;
-  const BOARD = D.BOARD;
   const util = OI.util;
 
   const Game = {
     state: null,
-    board: BOARD,
+    board: D.BOARD,
 
     /* ---------------- 初始化 ---------------- */
     create(options) {
       const opts = options || {};
       const diff = D.DIFFICULTIES[opts.difficulty] || D.DIFFICULTIES.normal;
-      const count = util.clamp(Number(opts.count) || 3, 2, 4);
+      const size = D.SIZE_PRESETS[opts.boardSize] ? Number(opts.boardSize) : 40;
+      const preset = D.SIZE_PRESETS[size];
+      this.board = D.getBoard(size);
+      this.boardSize = size;
+
+      const roster = (opts.humans && opts.humans.length ? opts.humans : [{ slot: 0, name: '你' }])
+        .slice(0, 4)
+        .map((h, i) => ({
+          slot: Number.isFinite(Number(h.slot)) ? Number(h.slot) : i,
+          name: String(h.name || ('选手' + (i + 1))).slice(0, 12)
+        }))
+        .sort((a, b) => a.slot - b.slot);
+      const count = util.clamp(Math.max(roster.length, Number(opts.count) || 3), roster.length, 4);
       const rounds = Number(opts.rounds) || CONFIG.maxRounds;
+      const startTokens = util.roundTo(diff.start * preset.startMult, 500);
+      const localSlot = Number.isFinite(Number(opts.localSlot)) ? Number(opts.localSlot) : 0;
+      const humanColors = ['#4ff0c0', '#6cb6ff', '#f0c979', '#ff8fa3'];
+      const humanIcons = ['🧑‍💻', '🧑‍🎓', '👩‍💻', '🧑‍🔧'];
+      const emptyStats = () => ({
+        rentPaid: 0, rentEarned: 0, builds: 0, upgrades: 0, cards: 0, buys: 0, synergies: 0, loans: 0
+      });
 
-      const players = [{
-        id: 'p0', name: '你', icon: '🧑‍💻', initial: '你', color: D.HUMAN_COLOR,
-        tag: '选手', isHuman: true, isAI: false,
-        tokens: diff.start, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
-        minTokens: diff.start,
-        stats: { rentPaid: 0, rentEarned: 0, builds: 0, upgrades: 0, cards: 0, buys: 0 }
-      }];
+      const players = roster.map((h, i) => ({
+        id: 'p' + h.slot,
+        slot: h.slot,
+        name: h.name,
+        icon: humanIcons[i % humanIcons.length],
+        initial: h.name.slice(0, 1) || '选',
+        color: humanColors[i % humanColors.length],
+        tag: h.slot === localSlot ? '选手' : '联机',
+        isHuman: true, isAI: false,
+        remote: h.slot !== localSlot,
+        tokens: startTokens, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
+        minTokens: startTokens,
+        loanTaken: false, loanPrincipal: 0, loanOwed: 0,
+        stats: emptyStats()
+      }));
 
-      const aiCount = count - 1;
+      const aiCount = count - roster.length;
       for (let i = 0; i < aiCount; i++) {
         const template = D.AI_PLAYERS[i % D.AI_PLAYERS.length];
         players.push({
-          id: template.id, name: template.name, icon: template.icon, initial: template.initial,
+          id: template.id + '-' + i, slot: 10 + i,
+          name: template.name, icon: template.icon, initial: template.initial,
           color: template.color, tag: template.tag, style: template.style,
-          isHuman: false, isAI: true, ai: Object.assign({}, template.ai),
-          tokens: diff.start, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
-          minTokens: diff.start,
-          stats: { rentPaid: 0, rentEarned: 0, builds: 0, upgrades: 0, cards: 0, buys: 0 }
+          isHuman: false, isAI: true, remote: false, ai: Object.assign({}, template.ai),
+          tokens: startTokens, pos: 0, inJail: false, jailTurns: 0, alive: true, getOut: 0,
+          minTokens: startTokens,
+          loanTaken: false, loanPrincipal: 0, loanOwed: 0,
+          stats: emptyStats()
         });
       }
 
       const props = {};
-      BOARD.forEach((tile) => {
+      this.board.forEach((tile) => {
         if (tile.type === 'property' || tile.type === 'facility') {
           props[tile.id] = { owner: null, algos: [], mortgaged: false };
         }
       });
 
+      const eraSpan = Math.max(1, Math.ceil(rounds / CONFIG.eras));
       this.state = {
         difficulty: diff.id,
         difficultyName: diff.name,
         aiFactor: diff.aiFactor,
-        startTokens: diff.start,
+        boardSize: size,
+        boardSizeName: preset.name,
+        salary: preset.salary,
+        jailFine: util.roundTo(CONFIG.jailFine * preset.startMult, 500),
+        facilityBase: preset.facilityBase,
+        loanLimit: preset.loan,
+        startTokens,
         maxRounds: rounds,
+        eraSpan,
+        era: 1,
+        eraName: '第一轮',
+        eraChanged: false,
         players,
+        humans: roster.length,
+        lan: !!opts.lan,
         props,
         current: 0,
         round: 1,
@@ -67,6 +108,10 @@
         log: [],
         cardsDrawn: 0,
         lastCard: {},
+        nextEventRound: 2,
+        eventCount: 0,
+        lastEventId: null,
+        lastTimedEvent: null,
         over: false,
         winner: null,
         ranking: [],
@@ -74,9 +119,10 @@
         turnSerial: 0
       };
 
-      this.log(`比赛开始：${diff.name} · ${rounds} 回合 · ${players.length} 名选手`, 'system');
-      this.log(`每人 ${util.fmt(diff.start)} token。token 就是钱：买地、建楼、交租都靠它。`, 'info');
-      this.log('走到自家算法建筑上可以直接升级；写暴力会被禁赛。', 'info');
+      this.log(`比赛开始：${diff.name} · ${preset.name} · ${rounds} 回合 · ${players.length} 名选手`, 'system');
+      this.log(`每人 ${util.fmt(startTokens)} token。token 就是钱：买地、建楼、交租都靠它。`, 'info');
+      this.log('赛程分为三轮时局：随着时间推移，随机事件会越来越频繁。', 'info');
+      this.log('走到自家算法建筑上可以直接升级；同一选手的算法建筑可以触发联动加成。', 'info');
       return this.state;
     },
 
@@ -91,24 +137,24 @@
       return this.state.players.filter((p) => p.alive);
     },
     tile(id) {
-      return BOARD[id];
+      return this.board[id];
     },
     ownedTiles(playerId) {
-      return BOARD.filter((t) => {
+      return this.board.filter((t) => {
         const p = this.state.props[t.id];
         return p && p.owner === playerId;
       });
     },
     ownsGroup(playerId, groupId) {
-      const tiles = BOARD.filter((t) => t.type === 'property' && t.group === groupId);
+      const tiles = this.board.filter((t) => t.type === 'property' && t.group === groupId);
       return tiles.length > 0 && tiles.every((t) => this.state.props[t.id].owner === playerId);
     },
     groupProgress(playerId, groupId) {
-      const tiles = BOARD.filter((t) => t.type === 'property' && t.group === groupId);
+      const tiles = this.board.filter((t) => t.type === 'property' && t.group === groupId);
       return tiles.filter((t) => this.state.props[t.id].owner === playerId).length;
     },
     facilitiesOwned(playerId) {
-      return BOARD.filter((t) => t.type === 'facility' && this.state.props[t.id].owner === playerId).length;
+      return this.board.filter((t) => t.type === 'facility' && this.state.props[t.id].owner === playerId).length;
     },
     netWorth(player) {
       let total = player.tokens;
@@ -121,11 +167,41 @@
             : tile.price + this.investedIn(tile.id);
         }
       });
+      total -= (player.loanOwed || 0);
       return Math.round(total);
+    },
+    /* 章节加成：40 格经典场集齐才翻倍；72/96 格按持有比例给 1~1.9 倍，集齐仍是 2 倍 */
+    groupRentMult(playerId, groupId) {
+      const tiles = this.board.filter((t) => t.type === 'property' && t.group === groupId);
+      if (!tiles.length) return 1;
+      const owned = tiles.filter((t) => this.state.props[t.id].owner === playerId).length;
+      if (!owned) return 1;
+      if (owned === tiles.length) return 2;
+      if (tiles.length <= 3) return 1;
+      return 1 + 0.9 * (owned / tiles.length);
+    },
+    /* 算法联动：同一选手的建筑算法同时出现组合中的两种时，租金全局加成 */
+    algorithmNames(playerId) {
+      const names = {};
+      this.ownedTiles(playerId).forEach((tile) => {
+        const prop = this.state.props[tile.id];
+        if (!prop || prop.mortgaged) return;
+        (prop.algos || []).forEach((algo) => { names[algo.name] = true; });
+      });
+      return names;
+    },
+    activeSynergies(playerId) {
+      const names = this.algorithmNames(playerId);
+      return D.SYNERGIES.filter((s) => s.algos.every((name) => names[name]));
+    },
+    synergyMult(playerId) {
+      const list = this.activeSynergies(playerId);
+      const mult = list.reduce((acc, s) => acc * s.mult, 1);
+      return util.clamp(mult, 1, CONFIG.synergyCap);
     },
     /* 算法建筑：升级费用随层数递增，拆除返还顶层造价的一半 */
     upgradeCost(tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop) return 0;
       const level = prop.algos.length;
@@ -134,7 +210,7 @@
       return costs[Math.min(level, costs.length - 1)] || tile.buildCost || 0;
     },
     investedIn(tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop) return 0;
       const costs = tile.buildCosts || [tile.buildCost];
@@ -145,14 +221,14 @@
       return total;
     },
     lastBuildCost(tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || !prop.algos.length) return 0;
       const costs = tile.buildCosts || [tile.buildCost];
       return costs[Math.min(prop.algos.length - 1, costs.length - 1)] || tile.buildCost || 0;
     },
     costAtLevel(tileId, level) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       if (!tile) return 0;
       const costs = tile.buildCosts || [tile.buildCost];
       return costs[Math.min(Math.max(level - 1, 0), costs.length - 1)] || tile.buildCost || 0;
@@ -167,26 +243,28 @@
       return util.clamp(value, 0.4, 2.5);
     },
     rentFor(tileId, diceTotal) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || !prop.owner || prop.mortgaged) return 0;
       if (tile.type === 'facility') {
         const count = this.facilitiesOwned(prop.owner);
-        return util.roundTo(CONFIG.facilityRentBase * count * (diceTotal || 7), 10);
+        const base = this.state.facilityBase || CONFIG.facilityRentBase;
+        return util.roundTo(base * count * (diceTotal || 7), 10);
       }
       let rent = tile.rent[prop.algos.length] || 0;
-      if (this.ownsGroup(prop.owner, tile.group)) rent *= 2;
-      const mult = this.marketMult(tile.group);
-      rent *= mult;
+      rent *= this.groupRentMult(prop.owner, tile.group);
+      rent *= this.marketMult(tile.group);
+      rent *= this.synergyMult(prop.owner);
       return Math.max(0, util.roundTo(rent, 10));
     },
     rentTable(tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || tile.type !== 'property') return [];
-      const groupBonus = prop.owner && this.ownsGroup(prop.owner, tile.group) ? 2 : 1;
-      const mult = this.marketMult(tile.group);
-      return tile.rent.map((r) => Math.round(r * groupBonus * mult));
+      const groupBonus = prop.owner ? this.groupRentMult(prop.owner, tile.group) : 1;
+      const market = this.marketMult(tile.group);
+      const synergy = prop.owner ? this.synergyMult(prop.owner) : 1;
+      return tile.rent.map((r) => Math.round(r * groupBonus * market * synergy));
     },
 
     /* ---------------- 日志 ---------------- */
@@ -211,11 +289,11 @@
     },
     stepForward(player) {
       const from = player.pos;
-      player.pos = (player.pos + 1) % 40;
+      player.pos = (player.pos + 1) % this.board.length;
       let salary = 0;
       if (player.pos === 0) {
-        player.tokens += CONFIG.salary;
-        salary = CONFIG.salary;
+        player.tokens += this.state.salary;
+        salary = this.state.salary;
       }
       player.minTokens = Math.min(player.minTokens, player.tokens);
       return { from, to: player.pos, salary };
@@ -225,15 +303,15 @@
       const wrapped = index <= from;
       player.pos = index;
       if (salary && (wrapped || index === 0)) {
-        player.tokens += CONFIG.salary;
-        return CONFIG.salary;
+        player.tokens += this.state.salary;
+        return this.state.salary;
       }
       return 0;
     },
 
     /* ---------------- 落地判定（不改状态） ---------------- */
     describeLanding(player) {
-      const tile = BOARD[player.pos];
+      const tile = this.board[player.pos];
       const prop = this.state.props[tile.id];
 
       if (tile.type === 'property' || tile.type === 'facility') {
@@ -270,7 +348,7 @@
 
     /* ---------------- 交易 ---------------- */
     buy(player, tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || prop.owner || player.tokens < tile.price || !player.alive) return false;
       player.tokens -= tile.price;
@@ -281,7 +359,7 @@
       return true;
     },
     canBuild(player, tileId, free) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || tile.type !== 'property') return false;
       if (prop.owner !== player.id || prop.mortgaged) return false;
@@ -291,8 +369,10 @@
     },
     build(player, tileId, free) {
       if (!this.canBuild(player, tileId, free)) return null;
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
+      const before = {};
+      this.activeSynergies(player.id).forEach((s) => { before[s.id] = true; });
       const cost = free ? 0 : this.upgradeCost(tileId);
       const level = prop.algos.length + 1;
       if (!free) player.tokens -= cost;
@@ -305,10 +385,17 @@
         `${player.name} 在【${tile.name}】${level === 1 ? '建造' : '升级'}了 Lv.${level} 算法建筑【${algo.name}】${free ? '（免费）' : `，支付 ${util.fmt(cost)} token`}。`,
         'good'
       );
+      const fresh = this.activeSynergies(player.id).filter((s) => !before[s.id]);
+      if (fresh.length) {
+        player.stats.synergies += fresh.length;
+        fresh.forEach((s) => {
+          this.log(`🔗 算法联动激活：${s.name}（${s.algos.join(' + ')}），${player.name} 的全部地块租金 ×${s.mult.toFixed(2)}。`, 'system');
+        });
+      }
       return algo;
     },
     sellAlgo(player, tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || prop.owner !== player.id || !prop.algos.length || prop.mortgaged) return 0;
       const refund = Math.round(this.costAtLevel(tileId, prop.algos.length) * CONFIG.sellRatio);
@@ -318,7 +405,7 @@
       return refund;
     },
     mortgage(player, tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || prop.owner !== player.id || prop.mortgaged) return 0;
       if (prop.algos && prop.algos.length) return 0;
@@ -329,7 +416,7 @@
       return amount;
     },
     redeem(player, tileId) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!tile || !prop || prop.owner !== player.id || !prop.mortgaged) return false;
       const cost = Math.round(tile.price * CONFIG.redeemRatio);
@@ -341,6 +428,47 @@
     },
     redeemCost(tile) {
       return Math.round(tile.price * CONFIG.redeemRatio);
+    },
+
+    /* ---------------- 银行贷款（每人一局一次） ---------------- */
+    loanInterestRate() {
+      return CONFIG.loanInterest;
+    },
+    loanAmount() {
+      return this.state.loanLimit || CONFIG.loanBase;
+    },
+    loanOwed(player) {
+      return player && player.loanOwed ? player.loanOwed : 0;
+    },
+    takeLoan(player) {
+      if (!player || !player.alive || player.loanTaken) return null;
+      const principal = this.loanAmount();
+      const owed = Math.round(principal * (1 + CONFIG.loanInterest));
+      player.loanTaken = true;
+      player.loanPrincipal = principal;
+      player.loanOwed = owed;
+      player.tokens += principal;
+      player.minTokens = Math.min(player.minTokens, player.tokens);
+      player.stats.loans += 1;
+      this.log(`🏦 ${player.name} 向银行申请了一次贷款：获得 ${util.fmt(principal)} token，赛程结束时需偿还 ${util.fmt(owed)} token。`, 'warn');
+      return { principal, owed };
+    },
+    repayLoan(player) {
+      if (!player || !player.alive || !player.loanOwed) return 0;
+      if (player.tokens < player.loanOwed) return 0;
+      const owed = player.loanOwed;
+      player.tokens -= owed;
+      player.loanOwed = 0;
+      this.log(`🏦 ${player.name} 提前还清银行贷款 ${util.fmt(owed)} token。`, 'good');
+      return owed;
+    },
+    aiLoan(player) {
+      if (!player || !player.alive || !player.ai) return;
+      if (!player.loanTaken && player.tokens < 2600) {
+        this.takeLoan(player);
+      } else if (player.loanOwed > 0 && player.tokens > player.loanOwed + 6000 && Math.random() < 0.5) {
+        this.repayLoan(player);
+      }
     },
 
     /* ---------------- 支付与破产 ---------------- */
@@ -377,6 +505,9 @@
     charge(player, amount, creditor) {
       if (!player || !player.alive) return { ok: false, paid: 0, bankrupt: false, liquidated: 0 };
       let liquidated = 0;
+      if (player.tokens < amount && !player.loanTaken) {
+        this.takeLoan(player);
+      }
       if (player.tokens < amount) {
         const res = this.liquidate(player, amount - player.tokens);
         liquidated = res.raised;
@@ -419,7 +550,7 @@
       return res;
     },
     payRent(player, tileId, diceTotal) {
-      const tile = BOARD[tileId];
+      const tile = this.board[tileId];
       const prop = this.state.props[tileId];
       if (!prop || !prop.owner) return null;
       if (prop.owner === player.id) return null;
@@ -503,7 +634,7 @@
 
     /* ---------------- 禁赛 ---------------- */
     sendToJail(player, reason) {
-      player.pos = 10;
+      player.pos = this.board.jailIndex;
       player.inJail = true;
       player.jailTurns = 0;
       this.state.doubles = 0;
@@ -520,7 +651,7 @@
       }
       player.jailTurns += 1;
       if (player.jailTurns >= CONFIG.jailTurns) {
-        const res = this.charge(player, CONFIG.jailFine, null);
+        const res = this.charge(player, this.state.jailFine, null);
         if (res.paid > 0) this.state.pot += res.paid;
         player.inJail = false;
         player.jailTurns = 0;
@@ -531,8 +662,8 @@
       return { roll, freed: false, forced: false };
     },
     payJailFine(player) {
-      if (!player.inJail || player.tokens < CONFIG.jailFine) return null;
-      const res = this.charge(player, CONFIG.jailFine, null);
+      if (!player.inJail || player.tokens < this.state.jailFine) return null;
+      const res = this.charge(player, this.state.jailFine, null);
       player.inJail = false;
       player.jailTurns = 0;
       if (res.paid > 0) this.state.pot += res.paid;
@@ -664,6 +795,118 @@
       }
     },
 
+    /* ---------------- 三轮时局 / 定时随机事件 ---------------- */
+    eraForRound(round) {
+      const span = this.state.eraSpan || Math.max(1, Math.ceil(this.state.maxRounds / CONFIG.eras));
+      return util.clamp(Math.ceil((round || 1) / span), 1, CONFIG.eras);
+    },
+    eraLabel(era) {
+      return ['第一轮 · 起步', '第二轮 · 加速', '第三轮 · 终局'][era - 1] || '第一轮 · 起步';
+    },
+    updateEra() {
+      const st = this.state;
+      const era = this.eraForRound(st.round);
+      if (era === st.era) return false;
+      st.era = era;
+      st.eraName = ['第一轮', '第二轮', '第三轮'][era - 1];
+      st.nextEventRound = Math.min(st.nextEventRound, st.round);
+      this.log(`🕒 进入${this.eraLabel(era)}：随机事件将变得更加频繁。`, 'system');
+      return true;
+    },
+    timedEventInterval(era) {
+      return [2, 2, 1][util.clamp(era, 1, 3) - 1];
+    },
+    maybeTimedEvent() {
+      const st = this.state;
+      if (!st || st.over) return null;
+      if (st.round < st.nextEventRound) return null;
+      if (st.eventCount >= 80) return null;
+      const pool = D.TIMED_EVENTS.filter((e) => e.id !== st.lastEventId);
+      const ev = util.pick(pool.length ? pool : D.TIMED_EVENTS);
+      st.lastEventId = ev.id;
+      st.eventCount += 1;
+      st.nextEventRound = st.round + this.timedEventInterval(st.era);
+      const result = this.applyTimedEvent(ev);
+      st.lastTimedEvent = {
+        id: ev.id, icon: ev.icon, title: ev.title, text: ev.text, tone: ev.tone,
+        round: st.round, summary: result.summary
+      };
+      this.log(`🕒 时局事件【${ev.title}】：${ev.text}`, ev.tone === 'bad' ? 'bad' : 'system');
+      return { event: ev, result, era: st.era };
+    },
+    applyTimedEvent(ev) {
+      const effect = ev.effect || {};
+      const alive = this.alivePlayers();
+      let summary = '';
+      switch (effect.type) {
+        case 'gainAll': {
+          alive.forEach((p) => this.gain(p, effect.amount));
+          summary = `全员 +${util.fmt(effect.amount)} token`;
+          break;
+        }
+        case 'payAll': {
+          let total = 0;
+          alive.forEach((p) => {
+            const res = this.charge(p, effect.amount, null);
+            total += res.paid;
+          });
+          this.state.pot += total;
+          summary = `全员共支付 ${util.fmt(total)} token 进入罚时池`;
+          break;
+        }
+        case 'market': {
+          const entry = this.randomMarket(effect.mult, effect.rounds);
+          summary = `${entry ? entry.groupName : '随机章节'}租金 ×${Number(effect.mult).toFixed(2)}`;
+          break;
+        }
+        case 'facilityBonus': {
+          let total = 0;
+          alive.forEach((p) => {
+            const count = this.facilitiesOwned(p.id);
+            const amount = count * effect.amount;
+            if (amount > 0) {
+              this.gain(p, amount);
+              total += amount;
+            }
+          });
+          summary = `算力设施补贴共 ${util.fmt(total)} token`;
+          break;
+        }
+        case 'crashAll': {
+          alive.forEach((p) => this.destroyBuild(p, effect.amount));
+          summary = '全场算法建筑随机损坏 1 层';
+          break;
+        }
+        case 'lowestGain': {
+          const sorted = alive.slice().sort((a, b) => this.netWorth(a) - this.netWorth(b));
+          if (sorted[0]) {
+            this.gain(sorted[0], effect.amount);
+            summary = `${sorted[0].name} 获得 ${util.fmt(effect.amount)} token 追赶资金`;
+          }
+          break;
+        }
+        case 'taxAll': {
+          let total = 0;
+          alive.forEach((p) => {
+            const res = this.charge(p, effect.amount, null);
+            total += res.paid;
+          });
+          this.state.pot += total;
+          summary = `全员共缴纳 ${util.fmt(total)} token 进入罚时池`;
+          break;
+        }
+        case 'freeBuildAll': {
+          alive.forEach((p) => this.freeBuildRandom(p));
+          summary = '全员随机地块免费加盖 1 层';
+          break;
+        }
+        default:
+          summary = '时局发生了一点变化';
+          break;
+      }
+      return { summary };
+    },
+
     /* ---------------- 回合 ---------------- */
     endTurn() {
       const st = this.state;
@@ -695,11 +938,25 @@
         return this.finish('last');
       }
 
+      let eraChanged = false;
+      let timed = null;
       if (wrapped) {
         st.round += 1;
         this.expireMarket();
         if (st.round > st.maxRounds) {
           return this.finish('rounds');
+        }
+        eraChanged = this.updateEra();
+        timed = this.maybeTimedEvent();
+        if (st.over) {
+          return { finished: true, ranking: st.ranking, winner: st.winner, reason: st.endReason, timed, eraChanged };
+        }
+        if (!alive[next].alive) {
+          for (let i = 1; i <= alive.length; i++) {
+            const idx = (st.current + i) % alive.length;
+            if (alive[idx].alive) { next = idx; break; }
+          }
+          if (!alive[next].alive) return this.finish('last');
         }
       }
 
@@ -711,6 +968,8 @@
         player: alive[next],
         wrapped,
         round: st.round,
+        eraChanged,
+        timed,
         finished: false
       };
     },
@@ -770,9 +1029,12 @@
       const reserve = Math.max(1800, player.tokens * (ai.reserve || 0.15));
       if (player.tokens - tile.price < reserve && !this.ownsGroup(player.id, tile.group)) return false;
       let chance = (ai.buy || 0.7) * (this.state.aiFactor || 1);
+      const groupTotal = this.board.filter((t) => t.type === 'property' && t.group === tile.group).length;
       const owned = this.groupProgress(player.id, tile.group);
-      if (owned === 2) chance += 0.25;
-      if (owned === 1) chance += 0.08;
+      const ratio = groupTotal ? owned / groupTotal : 0;
+      if (owned >= groupTotal) chance += 0.25;
+      else if (ratio >= 0.5) chance += 0.16;
+      else if (owned > 0) chance += 0.06;
       if (tile.price > player.tokens * 0.55) chance -= 0.15;
       if (this.state.difficulty === 'hard') chance += 0.06;
       chance = util.clamp(chance, 0.08, 0.97);
@@ -794,7 +1056,7 @@
     aiJailChoice(player) {
       if (player.getOut > 0) return 'card';
       const ai = player.ai || {};
-      if (player.tokens > CONFIG.jailFine + 8000 && Math.random() < (ai.jailPay || 0.4)) return 'pay';
+      if (player.tokens > this.state.jailFine + 8000 && Math.random() < (ai.jailPay || 0.4)) return 'pay';
       return 'roll';
     },
     aiShouldUpgrade(player, tileId) {

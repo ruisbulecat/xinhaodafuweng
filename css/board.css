@@ -10,9 +10,11 @@
   grid-template-columns: minmax(0, 1fr) 372px;
   gap: 22px;
   align-items: start;
-  max-width: 1280px;
+  max-width: 1420px;
   margin: 0 auto;
 }
+
+
 
 .board-col { min-width: 0; }
 
@@ -698,3 +700,45 @@
 .tile--corner .tile__name { display: block; overflow: visible; white-space: nowrap; font-size: 10.4px; letter-spacing: 0; -webkit-line-clamp: unset; word-break: keep-all; }
 @media (max-width: 760px) { .tile--corner .tile__name { font-size: 8.4px; } }
 @media (max-width: 560px) { .tile--corner .tile__name { font-size: 7px; } }
+
+/* ---------------- 72 / 96 格大棋盘 ---------------- */
+.board--dense { gap: 2px; padding: 7px; max-width: 1080px; }
+.board--dense .tile { border-radius: 4px; }
+.board--dense .tile__body { padding: 2px 2px 2px; gap: 0; }
+.board--dense .tile__name { font-size: 7.2px; line-height: 1.08; -webkit-line-clamp: 3; letter-spacing: 0; }
+.board--dense .tile__code { display: none; }
+.board--dense .tile__chips { display: none; }
+.board--dense .tile__price { font-size: 5.6px; margin-top: 1px; }
+.board--dense .tile__strip { height: 4px; }
+.board--dense .tile--left .tile__strip,
+.board--dense .tile--right .tile__strip { width: 4px; }
+.board--dense .tile--corner .tile__name { font-size: 7.4px; }
+.board--dense .tile-corner-icon { font-size: 12px; }
+.board--dense .tile--corner .tile__code { display: none; }
+.board--dense .tile__owner { width: 4px; height: 4px; }
+.board--dense .pawn { width: 16px; height: 16px; font-size: 7px; border-width: 1px; }
+.board--dense .board-center { gap: 6px; }
+
+.board--xl { gap: 1.6px; padding: 6px; }
+.board--xl .tile__name { font-size: 6.4px; line-height: 1.05; -webkit-line-clamp: 4; }
+.board--xl .tile__price { display: none; }
+.board--xl .tile--corner .tile__name { font-size: 6.2px; }
+.board--xl .pawn { width: 13px; height: 13px; font-size: 6px; border-width: 1px; }
+.board--xl .tile__strip { height: 3px; }
+.board--xl .tile--left .tile__strip,
+.board--xl .tile--right .tile__strip { width: 3px; }
+.board--xl .tile-corner-icon { font-size: 10px; }
+
+@media (max-width: 1080px) {
+  .board--dense .tile__name { font-size: 6.4px; }
+  .board--xl .tile__name { font-size: 5.4px; }
+}
+
+@media (max-width: 760px) {
+  .board--dense .tile__name { font-size: 5.4px; }
+  .board--xl .tile__name { font-size: 4.4px; }
+  .board--dense .tile__price, .board--xl .tile__price { display: none; }
+  .board--dense .pawn, .board--xl .pawn { width: 10px; height: 10px; font-size: 5px; }
+  .board--dense .tile--corner .tile__name, .board--xl .tile--corner .tile__name { font-size: 5.2px; }
+  .board--dense .tile-corner-icon, .board--xl .tile-corner-icon { font-size: 8px; }
+}

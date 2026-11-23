@@ -1,0 +1,19 @@
+
+  ==============================================
+   OI-OPOLY - LAN Server (PowerShell)
+  ==============================================
+   Local:    http://127.0.0.1:8901
+   LAN:      http://172.16.42.136:8901
+
+   Open the LAN address on other devices in the same Wi-Fi.
+   Allow PowerShell through Windows Firewall if asked.
+   Press Ctrl+C to stop.
+
+[OI-LAN] create room 3023 host 主机
+[OI-LAN] join room 3023 客机 slot 1
+[OI-LAN] create room 7800 host H
+[OI-LAN] join room 7800 G slot 1
+[OI-LAN] create room 9557 host 房主阿一
+[OI-LAN] join room 9557 队友小七 slot 1
+[OI-LAN] start room 9557
+[OI-LAN] create room 1016 host H

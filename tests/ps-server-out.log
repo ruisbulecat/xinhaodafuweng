@@ -1,0 +1,14 @@
+
+  ==============================================
+   淇″ゥ澶у瘜缈?- LAN Server (PowerShell)
+  ==============================================
+   Local:    http://127.0.0.1:8900
+   LAN:      http://172.16.42.136:8900
+
+   Open the LAN address on other devices in the same Wi-Fi.
+   Allow PowerShell through Windows Firewall if asked.
+   Press Ctrl+C to stop.
+
+[OI-LAN] create room 9875 host 房主
+[OI-LAN] join room 9875 玩家二 slot 1
+[OI-LAN] start room 9875
